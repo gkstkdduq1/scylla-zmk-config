@@ -1,6 +1,6 @@
 #include "scylla.dtsi"
 
-&default_transform {
+&scylla_transform {
 	col-offset = <6>;
 };
 
