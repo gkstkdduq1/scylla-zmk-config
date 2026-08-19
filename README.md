@@ -33,7 +33,7 @@ To flash: double-tap the reset button, a `NICENANO` USB drive appears, drag the
    (left inner thumb, `&mo 1`) and press the **bottom-left corner key** (the one
    that is `LCTRL` on the base layer). Without unlocking, Studio is read-only.
 
-   Also added on that layer: **Lower + bottom-right corner key** = `&bootloader`,
+   Also added on that layer: **Lower + bottom-right corner key** (`BSLH` on the base layer) = `&bootloader`,
    so you can enter flash mode without reaching for the reset button.
 4. Remap, then Save. Changes are written to the keyboard's flash and survive
    unplugging — the keyboard keeps them on any host it connects to.
