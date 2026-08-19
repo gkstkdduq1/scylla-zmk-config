@@ -1,0 +1,18 @@
+# Direct BLE split (no dongle). Left half is central and carries ZMK Studio.
+include:
+  # Left / central — flash this one to change keymaps from ZMK Studio over USB.
+  - board: nice_nano//zmk
+    shield: scylla_left
+    snippet: studio-rpc-usb-uart
+    cmake-args: -DCONFIG_ZMK_STUDIO=y
+    artifact-name: scylla_left_studio
+
+  # Right / peripheral.
+  - board: nice_nano//zmk
+    shield: scylla_right
+    artifact-name: scylla_right
+
+  # Flash to BOTH halves first if pairing gets stuck, then reflash the two above.
+  - board: nice_nano//zmk
+    shield: settings_reset
+    artifact-name: settings_reset

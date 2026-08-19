@@ -1,0 +1,11 @@
+file_format: "1"
+id: scylla
+name: Scylla
+type: shield
+url: https://bastardkb.com/scylla/
+requires: [pro_micro]
+features:
+  - keys
+siblings:
+  - scylla_left
+  - scylla_right

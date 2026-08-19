@@ -1,0 +1,68 @@
+/*
+ * Scylla — starting keymap.
+ *
+ * IMPORTANT: once you edit the keymap in ZMK Studio, the keyboard runs from
+ * settings stored in flash and IGNORES this file. To go back to this file,
+ * use "Restore Stock Settings" in Studio (or flash settings_reset).
+ *
+ * So: treat this as the seed/fallback. Day-to-day remapping happens in Studio.
+ */
+
+#include <behaviors.dtsi>
+#include <dt-bindings/zmk/keys.h>
+#include <dt-bindings/zmk/bt.h>
+#include <dt-bindings/zmk/outputs.h>
+
+/ {
+    keymap {
+        compatible = "zmk,keymap";
+
+        base_layer {
+            display-name = "Base";
+            bindings = <
+    &kp GRAVE  &kp N1  &kp N2  &kp N3  &kp N4  &kp N5      &kp N6  &kp N7     &kp N8     &kp N9   &kp N0    &kp BSLH
+    &kp TAB    &kp Q   &kp W   &kp F   &kp P   &kp B       &kp J   &kp L      &kp U      &kp Y    &kp SQT   &kp EQUAL
+    &kp LBKT   &kp A   &kp R   &kp S   &kp T   &kp G       &kp M   &kp N      &kp E      &kp I    &kp O     &kp MINUS
+    &kp RBKT   &kp Z   &kp X   &kp C   &kp D   &kp V       &kp K   &kp H      &kp COMMA  &kp DOT  &kp SEMI  &kp FSLH
+                       &kp LCTRL  &mo 2   &kp LSHFT       &kp RSHFT  &kp ESC    &kp RGUI
+                                  &kp LALT  &kp SPACE     &kp BSPC   &kp ENTER
+            >;
+        };
+
+        qwerty_layer {
+            display-name = "QWERTY";
+            bindings = <
+    &kp GRAVE  &kp N1  &kp N2  &kp N3  &kp N4  &kp N5      &kp N6  &kp N7     &kp N8     &kp N9   &kp N0    &kp BSLH
+    &kp TAB    &kp Q   &kp W   &kp E   &kp R   &kp T       &kp Y   &kp U      &kp I      &kp O    &kp P     &kp EQUAL
+    &kp LBKT   &kp A   &kp S   &kp D   &kp F   &kp G       &kp H   &kp J      &kp K      &kp L    &kp SQT   &kp RBKT
+    &kp MINUS  &kp Z   &kp X   &kp C   &kp V   &kp B       &kp N   &kp M      &kp COMMA  &kp DOT  &kp SEMI  &kp FSLH
+                       &kp LCTRL  &mo 2   &kp LSHFT       &kp RSHFT  &kp ESC    &kp RGUI
+                                  &kp LALT  &kp SPACE     &kp BSPC   &kp ENTER
+            >;
+        };
+
+        fn_layer {
+            display-name = "Fn/Sys";
+            bindings = <
+    &kp CAPS    &kp F1        &kp F2        &kp F3        &kp F4      &kp F5       &kp F6          &kp F7          &kp F8          &kp F9      &kp F10    &kp F11
+    &kp C_PREV  &kp C_PP      &kp C_VOL_DN  &kp C_VOL_UP  &kp PG_UP   &kp HOME     &studio_unlock  &none           &kp PSCRN       &kp PAUS    &none      &kp F12
+    &kp C_NEXT  &kp LEFT      &kp DOWN      &kp UP        &kp RIGHT   &kp DEL      &out OUT_TOG    &bt BT_SEL 0    &bt BT_SEL 1    &bt BT_SEL 2  &bt BT_SEL 3  &bt BT_CLR
+    &kp F13     &kp F14       &kp F15       &kp F16       &kp PG_DN   &kp END      &bootloader     &sys_reset      &kp INS         &kp SLCK    &none      &tog 1
+                              &kp LCTRL  &mo 2   &kp LSHFT       &kp RSHFT  &kp ESC    &kp RGUI
+                                         &kp LALT  &kp SPACE     &kp BSPC   &kp ENTER
+            >;
+        };
+
+        spare_layer {
+            display-name = "Spare";
+            bindings = <
+    &trans  &trans  &trans  &trans  &trans  &trans      &trans  &trans  &trans  &trans  &trans  &trans
+    &trans  &trans  &trans  &trans  &trans  &trans      &trans  &trans  &trans  &trans  &trans  &trans
+    &trans  &trans  &trans  &trans  &trans  &trans      &trans  &trans  &trans  &trans  &trans  &trans
+    &trans  &trans  &trans  &trans  &trans  &trans      &trans  &trans  &trans  &trans  &trans  &trans
+                    &trans  &trans  &trans      &trans  &trans  &trans
+                            &trans  &trans      &trans  &trans
+            >;
+        };
+    };
+};
