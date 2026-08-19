@@ -29,9 +29,12 @@ To flash: double-tap the reset button, a `NICENANO` USB drive appears, drag the
    On Windows, Studio's BLE transport is not supported — Windows' Bluetooth stack
    will not hand out GATT access to a device paired as HID. USB is the only route
    here. macOS and Linux can do it over BLE.
-3. Connect in the app, then press the **Studio Unlock** key: `Fn layer (hold the
-   left inner thumb, `&mo 2`) + the right-hand index key on the second row`.
-   Without unlocking, Studio connects read-only.
+3. Connect in the app, then press the **Studio Unlock** chord: hold **Lower**
+   (left inner thumb, `&mo 1`) and press the **bottom-left corner key** (the one
+   that is `LCTRL` on the base layer). Without unlocking, Studio is read-only.
+
+   Also added on that layer: **Lower + bottom-right corner key** = `&bootloader`,
+   so you can enter flash mode without reaching for the reset button.
 4. Remap, then Save. Changes are written to the keyboard's flash and survive
    unplugging — the keyboard keeps them on any host it connects to.
 
@@ -57,7 +60,12 @@ here in `boards/shields/scylla/`:
 - `scylla.dtsi` — kscan matrix + `scylla_transform`, no `chosen` transform
 - `scylla-layouts.dtsi` — the 58-key `zmk,physical-layout` Studio draws
 
-Shield base adapted from https://github.com/amadeusolofsson/zmk-scylla
+Shield base adapted from https://github.com/amadeusolofsson/zmk-scylla — its
+row/col GPIO mapping is byte-identical to the pin mapping in the working 2023
+config at https://github.com/gkstkdduq1/zmk-config, so the wiring is confirmed.
+
+The keymap in `config/scylla.keymap` is ported from that same 2023 config
+(QWERTY base + lower + raise), plus the two keys listed above.
 
 ## Pro Micro nRF52840 clones (SuperMini etc.)
 
