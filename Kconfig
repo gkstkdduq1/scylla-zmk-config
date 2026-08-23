@@ -4,6 +4,11 @@ config ZMK_BEHAVIOR_STATUS_REPORT
     bool "Status report behavior"
     default y
     depends on DT_HAS_ZMK_BEHAVIOR_STATUS_REPORT_ENABLED
+    depends on !ZMK_SPLIT || ZMK_SPLIT_ROLE_CENTRAL
+    help
+      Types the current output endpoint, BLE profile and battery levels as
+      text. The Studio RPC cannot report any of that, so the keyboard has to
+      volunteer it through the keystrokes it already sends.
 
 if ZMK_BEHAVIOR_STATUS_REPORT
 
