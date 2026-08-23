@@ -8,6 +8,7 @@
  *
  * Added on top of the original keymap:
  *   lower + bottom-left corner key  -> &studio_unlock  (unlocks Studio writes)
+ *   lower + bottom-left+1 key       -> &status_report  (types out connection status)
  *   lower + bottom-right corner key -> &bootloader     (flash mode, no reset button)
  *
  * Spare 1/2/3 are all-&trans placeholder layers. ZMK Studio cannot create new
@@ -21,6 +22,17 @@
 #include <dt-bindings/zmk/outputs.h>
 
 / {
+    behaviors {
+        // Types the current output / BLE profile / battery as text.
+        // Nothing else can report this: the Studio RPC has no endpoint or
+        // profile request, so the keyboard has to volunteer it as keystrokes.
+        status_report: status_report {
+            compatible = "zmk,behavior-status-report";
+            #binding-cells = <0>;
+            display-name = "Status Report";
+        };
+    };
+
     keymap {
         compatible = "zmk,keymap";
 
@@ -49,7 +61,7 @@
    &out OUT_TOG    &bt BT_SEL 0  &bt BT_SEL 1  &bt BT_SEL 2  &bt BT_SEL 3  &bt BT_SEL 4    &kp N6     &kp N7     &kp N8    &kp N9    &kp N0    &kp BSPC
    &bt BT_CLR      &trans        &trans        &kp UP        &trans        &trans          &kp MINUS  &kp EQUAL  &kp LBKT  &kp RBKT  &kp BSLH  &kp GRAVE
    &kp LSHFT       &trans        &kp LEFT      &kp DOWN      &kp RIGHT     &trans          &kp UNDER  &kp PLUS   &kp LBRC  &kp RBRC  &kp PIPE  &kp TILDE
-   &studio_unlock  &trans        &trans        &trans        &trans        &trans          &trans     &trans     &trans    &trans    &trans    &bootloader
+   &studio_unlock  &status_report  &trans      &trans        &trans        &trans          &trans     &trans     &trans    &trans    &trans    &bootloader
                                  &trans     &trans      &trans            &trans     &trans     &trans
                                             &kp BSPC   &kp LANG1         &kp LALT   &kp DEL
             >;

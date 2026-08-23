@@ -1,0 +1,14 @@
+# Behaviors provided by this config repo, built as a Zephyr module.
+
+config ZMK_BEHAVIOR_STATUS_REPORT
+    bool "Status report behavior"
+    default y
+    depends on DT_HAS_ZMK_BEHAVIOR_STATUS_REPORT_ENABLED
+
+if ZMK_BEHAVIOR_STATUS_REPORT
+
+config ZMK_BEHAVIOR_STATUS_REPORT_STACK_SIZE
+    int "Status report thread stack size"
+    default 1024
+
+endif

@@ -1,0 +1,24 @@
+# Copyright (c) 2026
+# SPDX-License-Identifier: MIT
+
+description: |
+  Types out the keyboard's current connection status as text.
+
+  The Studio RPC exposes only core/behaviors/keymap, so a host application has
+  no way to ask which endpoint or BLE profile is active. This behavior makes the
+  keyboard volunteer the information over the one channel it always has: the
+  keystrokes it is already sending.
+
+compatible: "zmk,behavior-status-report"
+
+include: zero_param.yaml
+
+properties:
+  tap-ms:
+    type: int
+    default: 6
+    description: How long each synthesized key is held, in milliseconds.
+  wait-ms:
+    type: int
+    default: 6
+    description: Gap between synthesized keys, in milliseconds.
