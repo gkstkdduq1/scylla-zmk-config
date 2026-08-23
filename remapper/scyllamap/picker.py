@@ -19,10 +19,12 @@ from tkinter import ttk
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import keycodes as kc  # noqa: E402
+import ui              # noqa: E402
 
-BG = "#1b1d21"
-FG = "#e6e6e6"
-DIM = "#8b9199"
+BG = ui.BG
+FG = ui.TEXT
+DIM = ui.TEXT_DIM
+FIELD = ui.SURFACE_HI
 
 
 class BehaviorPicker(tk.Toplevel):
@@ -45,10 +47,10 @@ class BehaviorPicker(tk.Toplevel):
 
         tk.Label(self, text="기능", bg=BG, fg=DIM, anchor="w").pack(
             fill="x", padx=14, pady=(14, 2))
-        self.listbox = tk.Listbox(self, bg="#2a2e34", fg=FG, height=11,
+        self.listbox = tk.Listbox(self, bg=FIELD, fg=FG, height=11,
                                   highlightthickness=0, borderwidth=0,
-                                  selectbackground="#3d6fd6",
-                                  activestyle="none", font=("Segoe UI", 10))
+                                  selectbackground=ui.ACCENT,
+                                  activestyle="none", font=ui.F_BODY)
         for _bid, name in self._names:
             self.listbox.insert("end", name)
         self.listbox.pack(fill="both", expand=True, padx=14)
@@ -59,13 +61,14 @@ class BehaviorPicker(tk.Toplevel):
 
         self.note = tk.Label(self, text="", bg=BG, fg=DIM, anchor="w",
                              wraplength=420, justify="left",
-                             font=("Segoe UI", 9))
+                             font=ui.F_SMALL)
         self.note.pack(fill="x", padx=14, pady=(6, 0))
 
         buttons = tk.Frame(self, bg=BG)
         buttons.pack(fill="x", padx=14, pady=12)
-        tk.Button(buttons, text="적용", width=10, command=self._accept).pack(side="right")
-        tk.Button(buttons, text="취소", width=10, command=self.destroy).pack(
+        ui.Button(buttons, "적용", self._accept, width=88, primary=True,
+                  bg=BG).pack(side="right")
+        ui.Button(buttons, "취소", self.destroy, width=88, bg=BG).pack(
             side="right", padx=(0, 6))
 
         self.bind("<Escape>", lambda _e: self.destroy())
@@ -138,7 +141,7 @@ class BehaviorPicker(tk.Toplevel):
             return
 
         if kind == "hid_usage":
-            entry = tk.Entry(row, bg="#2a2e34", fg=FG, insertbackground=FG,
+            entry = tk.Entry(row, bg=FIELD, fg=FG, insertbackground=FG,
                              relief="flat", width=30)
             entry.pack(side="left", fill="x", expand=True)
             entry.insert(0, "여기를 누르고 원하는 키를 누르세요")
@@ -170,7 +173,7 @@ class BehaviorPicker(tk.Toplevel):
         if kind == "range":
             spin_from, spin_to = desc.range.min, desc.range.max
         spin = tk.Spinbox(row, from_=spin_from, to=spin_to, width=10,
-                          bg="#2a2e34", fg=FG, insertbackground=FG, relief="flat")
+                          bg=FIELD, fg=FG, insertbackground=FG, relief="flat")
         spin.pack(side="left")
         self._param_widgets.append(
             (index, lambda s=spin: int(s.get() or 0)))

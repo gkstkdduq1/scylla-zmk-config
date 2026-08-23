@@ -99,6 +99,10 @@ Learned from the ZMK sources and verified against a live keyboard:
 | `scyllamap/rpc.py` | framing, request/response correlation, subsystem wrappers |
 | `scyllamap/keycodes.py` | HID usage tables, Windows VK translation, probe set |
 | `scyllamap/gui.py` | the remap window |
+| `scyllamap/ui.py` | palette and canvas-drawn widgets |
+| `scyllamap/picker.py` | behavior chooser dialog |
+| `scyllamap/firmware.py` | release download and flashing |
+| `scyllamap/worker.py` | keyboard I/O off the UI thread |
 | `scyllamap/labels.py` | renders bindings from the firmware's own metadata |
 | `scyllamap/app.py` | tray icon, entry point |
 | `scyllamap/startup.py` | Startup-folder shortcut |
