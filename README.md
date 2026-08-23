@@ -18,9 +18,16 @@ a `firmware` artifact containing:
 | `settings_reset-nice_nano-zmk.uf2` | either half, to wipe pairing/settings |
 
 To flash: double-tap the reset button, a `NICENANO` USB drive appears, drag the
-`.uf2` onto it.
+`.uf2` onto it. `flash.ps1` automates the waiting-and-copying half:
 
-**First flash order:** `settings_reset` on both halves → then `left` and `right`.
+```powershell
+.lash.ps1 left     # plug the LEFT half in first, then run this, then double-tap reset
+.lash.ps1 right    # move the cable to the RIGHT half
+.lash.ps1 reset    # settings_reset — only if the halves refuse to pair
+```
+
+Only the half physically connected by USB shows a bootloader drive, so flash one
+half at a time and move the cable between them.
 
 ## Using ZMK Studio
 
