@@ -60,6 +60,7 @@ class EditorWindow(tk.Tk):
         self._probe_map = {}
         self._key_items = {}
         self._rect_of = {}
+        self._retry_job = None
 
         self._build_ui()
         self.bind_all("<KeyPress>", self._on_key)
@@ -131,6 +132,9 @@ class EditorWindow(tk.Tk):
             self._on_hide()
 
     def disconnect(self):
+        if self._retry_job is not None:
+            self.after_cancel(self._retry_job)
+            self._retry_job = None
         if self.conn:
             try:
                 self.conn.close()
@@ -144,9 +148,11 @@ class EditorWindow(tk.Tk):
     def connect(self):
         ports = rpc.find_ports()
         if not ports:
-            self._set_status("시리얼 포트를 찾지 못했습니다.", ERR_C)
+            self._set_status("키보드를 찾는 중…", WARN_C)
             self._set_hint("왼쪽 반쪽을 USB로 연결하세요. "
+                           "연결되면 자동으로 잡습니다.\n"
                            "Studio 지원 펌웨어가 올라가 있어야 합니다.")
+            self._retry_soon()
             return
         port = ports[0].device
         try:
@@ -156,7 +162,9 @@ class EditorWindow(tk.Tk):
             self.conn = None
             self._set_status("연결 실패: %s" % exc, ERR_C)
             self._set_hint("ZMK Studio가 켜져 있으면 닫아주세요. "
-                           "포트는 한 프로그램만 쓸 수 있습니다.")
+                           "포트는 한 프로그램만 쓸 수 있습니다.\n"
+                           "계속 재시도합니다.")
+            self._retry_soon()
             return
 
         locked = self.conn.lock_state() != 1
@@ -169,6 +177,18 @@ class EditorWindow(tk.Tk):
             self.after(700, self._poll_lock)
             return
         self.refresh()
+
+    def _retry_soon(self):
+        """Keep looking for the keyboard while the window is open."""
+        if self._retry_job is not None:
+            self.after_cancel(self._retry_job)
+        self._retry_job = self.after(1500, self._retry)
+
+    def _retry(self):
+        self._retry_job = None
+        if self.conn is not None or self.state() == "withdrawn":
+            return
+        self.connect()
 
     def _poll_lock(self):
         if self.conn is None:
