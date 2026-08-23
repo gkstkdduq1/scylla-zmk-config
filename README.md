@@ -56,6 +56,41 @@ run "Restore Stock Settings" in Studio. Pick one source of truth: either edit th
 file and rebuild, or edit in Studio. Studio is the whole point here, so the file
 is just the seed/fallback.
 
+## Status report key
+
+`Lower` + the key one to the right of the bottom-left corner types the current
+connection state wherever the cursor is:
+
+```
+out=ble prof=2 conn=1 batt=96/100
+```
+
+| field | meaning |
+| --- | --- |
+| `out` | endpoint actually in use. `out=ble?usb` means USB is preferred but not connected |
+| `prof` | active BLE profile index |
+| `conn` | 1 if that profile has a live connection, 0 if only bonded |
+| `batt` | this half / the other half |
+
+This exists because nothing else can report it. The Studio RPC has only
+`core`, `behaviors` and `keymap` subsystems and no endpoint, profile or battery
+request, so no host application — Studio included — can ask the keyboard which
+output or profile is live. The keyboard has to volunteer it, and the channel it
+always has is the keystrokes it is already sending.
+
+Battery is in there because the BLE Battery Services are unreachable over USB;
+this is the only way to see both halves on a cable.
+
+The output is lowercase ASCII, but a Hangul/Kana IME will still transliterate
+the letters — switch to English first. The companion app in `remapper/` reads
+raw scancodes, so IME state does not affect it.
+
+Implemented in `src/behavior_status_report.c`, which makes this repo a Zephyr
+module. It types via `raise_zmk_keycode_state_changed_from_encoded` — the same
+entry point `&kp` uses — so it rides ZMK's normal pipeline instead of poking HID,
+and it does not depend on the layout of `zmk_behavior_binding`, which gains a
+field when `CONFIG_ZMK_BEHAVIOR_LOCAL_IDS_IN_BINDINGS` is set.
+
 ## Layout notes
 
 Studio needs the keymap to come from a `zmk,physical-layout`, not a
