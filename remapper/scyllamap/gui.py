@@ -28,8 +28,13 @@ import rpc             # noqa: E402
 import keycodes as kc  # noqa: E402
 import labels          # noqa: E402
 import worker          # noqa: E402
+import picker          # noqa: E402
+import firmware        # noqa: E402
 
 BEHAVIOR_KEY_PRESS = 2
+FIRMWARE_DIR = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "..", "firmware")
+FIRMWARE_DIR = os.path.normpath(FIRMWARE_DIR)
 UNIT = 0.46          # px per physical-layout unit (100 units == 1u key)
 PAD = 14
 
@@ -141,6 +146,14 @@ class EditorWindow(tk.Tk):
                                    command=self.start_probe, state="disabled")
         self.btn_probe.pack(side="left")
 
+        self.btn_pick = tk.Button(bar, text="다른 기능…", command=self.pick_behavior,
+                                  state="disabled")
+        self.btn_pick.pack(side="left", padx=(6, 0))
+
+        self.btn_update = tk.Button(bar, text="펌웨어 업데이트",
+                                    command=self.update_firmware)
+        self.btn_update.pack(side="left", padx=(14, 0))
+
         self.btn_ble = tk.Button(bar, text="블루투스로 연결",
                                  command=self.connect_ble)
         self.btn_ble.pack(side="right")
@@ -170,7 +183,8 @@ class EditorWindow(tk.Tk):
     def _set_busy(self, on, note=None):
         self.busy = on
         state = "disabled" if on else "normal"
-        for b in (self.btn_probe, self.btn_usb, self.btn_ble):
+        for b in (self.btn_probe, self.btn_pick, self.btn_usb,
+                  self.btn_ble, self.btn_update):
             b.config(state=state)
         if on and note:
             self._set_status(note, WARN_C)
@@ -342,7 +356,8 @@ class EditorWindow(tk.Tk):
         if self.layer_index >= len(names):
             self.layer_index = 0
         self.layer_box.current(self.layer_index)
-        self.btn_probe.config(state="disabled" if self.busy else "normal")
+        for b in (self.btn_probe, self.btn_pick):
+            b.config(state="disabled" if self.busy else "normal")
         state = "normal" if snap.dirty else "disabled"
         self.btn_save.config(state=state)
         self.btn_discard.config(state=state)
@@ -353,18 +368,39 @@ class EditorWindow(tk.Tk):
             self._set_hint("바꿀 키를 캔버스에서 클릭하거나, "
                            "[키 눌러서 선택]을 누르고 키보드에서 그 키를 누르세요.")
 
+    def _link_text(self):
+        """What this machine can actually observe about the link.
+
+        Which endpoint the keyboard is *sending to* is not knowable from here -
+        the RPC has no endpoint request, and its subsystems are fixed in ZMK
+        itself, so a module cannot add one. When both links are up, the status
+        report key is the only way to tell. Everything else is visible.
+        """
+        cable = bool(rpc.find_ports())
+        wireless = self.conn is not None and self.conn.kind == "BLE"
+        if cable and wireless:
+            return "USB·BLE 둘 다 연결됨 (출력 쪽은 상태 키로 확인)", WARN_C
+        if cable:
+            return "USB 케이블 연결됨", OK_C
+        if wireless:
+            return "블루투스로 연결됨", OK_C
+        return "", DIM
+
     def _show_batteries(self, batteries):
         if not batteries:
-            self.battery.config(
-                text="배터리: USB 연결에서는 안 보입니다" if self.conn
-                     and self.conn.kind == "USB" else "")
+            link, colour = self._link_text()
+            if self.conn is not None and self.conn.kind == "USB":
+                link = (link + "   ·   " if link else "") +                        "배터리는 블루투스로 연결해야 보입니다"
+            self.battery.config(text=link, fg=colour)
             return
         order = {"왼쪽": 0, "오른쪽": 1}
         items = sorted(batteries, key=lambda b: order.get(b[0], 9))
         worst = min(p for _n, p in items)
         colour = ERR_C if worst <= 15 else (WARN_C if worst <= 30 else DIM)
-        self.battery.config(
-            text="  ".join("%s %d%%" % (n, p) for n, p in items), fg=colour)
+        link, _lc = self._link_text()
+        text = "  ".join("%s %d%%" % (n, p) for n, p in items)
+        self.battery.config(text=(text + "   ·   " + link) if link else text,
+                            fg=colour)
 
     # -- drawing ------------------------------------------------------------
 
@@ -581,6 +617,125 @@ class EditorWindow(tk.Tk):
             messagebox.showerror("쓰기 실패", str(exc))
 
         self.worker.submit(job, done, failed)
+
+    # -- assigning a non-keypress behavior -----------------------------------
+
+    def pick_behavior(self):
+        """Assign something you cannot express by pressing a key.
+
+        Output toggle, BLE profile select, layer moves - none of these can be
+        demonstrated on the keyboard, so they need a list.
+        """
+        if self.conn is None or self.busy or not self.keymap:
+            return
+        if self.selected is None:
+            self._set_hint("먼저 바꿀 키를 고르세요. "
+                           "캔버스에서 클릭하거나 [키 눌러서 선택]을 쓰세요.", WARN_C)
+            return
+        choice = picker.ask(self, self.catalog, list(self.keymap.layers))
+        if choice is None:
+            return
+        behavior_id, param1, param2 = choice
+        self._apply_binding(behavior_id, param1, param2)
+
+    def _apply_binding(self, behavior_id, param1, param2):
+        layer = self.keymap.layers[self.layer_index]
+        pos = self.selected
+        self.mode = "idle"
+        self.selected = None
+        self._set_busy(True, "쓰는 중…")
+
+        def job():
+            return self.conn.set_binding(layer.id, pos, behavior_id, param1, param2)
+
+        def done(resp):
+            self._set_busy(False)
+            if resp != 0:
+                reason = {1: "위치가 잘못됨", 2: "그 기능을 쓸 수 없음",
+                          3: "파라미터가 맞지 않음"}.get(resp, "코드 %d" % resp)
+                messagebox.showerror("쓰기 거부됨", "키보드가 거부했습니다: %s" % reason)
+                return
+            self.refresh()
+            self._set_hint("%s 레이어 %d번 자리를 %s 로 바꿨습니다. "
+                           "[저장]을 눌러야 키보드에 기록됩니다."
+                           % (layer.name, pos, self.catalog.name(behavior_id)), OK_C)
+
+        def failed(exc):
+            self._set_busy(False)
+            messagebox.showerror("쓰기 실패", str(exc))
+
+        self.worker.submit(job, done, failed)
+
+    # -- firmware ------------------------------------------------------------
+
+    def update_firmware(self):
+        """Fetch the published build, then guide the user through flashing.
+
+        Entering the bootloader cannot be automated - the RPC has no reboot
+        request - but the keymap's &bootloader key does it without touching the
+        reset button.
+        """
+        if self.busy:
+            return
+        self._set_busy(True, "릴리스 확인 중…")
+        self.worker.submit(firmware.latest_release, self._release_found,
+                           self._firmware_failed)
+
+    def _release_found(self, release):
+        self._set_busy(False)
+        here = firmware.local_version(FIRMWARE_DIR)
+        current = " (내려받은 버전과 같습니다)" if here == release["tag"] else ""
+        if not messagebox.askyesno(
+                "펌웨어 업데이트",
+                "최신 빌드: %s%s\n\n"
+                "내려받고 왼쪽 반쪽에 올릴까요?\n"
+                "파일을 받은 뒤 부트로더 진입을 안내합니다." % (release["tag"], current)):
+            return
+        self._set_busy(True, "내려받는 중…")
+
+        def job():
+            firmware.sync(FIRMWARE_DIR, release,
+                          progress=lambda msg: None)
+            return release
+
+        self.worker.submit(job, self._downloaded, self._firmware_failed)
+
+    def _downloaded(self, release):
+        self._set_busy(False)
+        if not messagebox.askyesno(
+                "부트로더 진입",
+                "%s 를 내려받았습니다.\n\n"
+                "이제 키보드에서 부트로더 키를 누르세요:\n"
+                "  Lower + 오른쪽 아래 맨 끝 키\n\n"
+                "(리셋 버튼 두 번 누르기도 동일합니다.)\n\n"
+                "[예]를 누르면 드라이브가 나타날 때까지 기다립니다."
+                % release["tag"]):
+            return
+        self._set_busy(True, "부트로더 드라이브를 기다리는 중… (최대 90초)")
+        self.worker.submit(lambda: firmware.wait_for_bootloader(90.0),
+                           self._bootloader_ready, self._firmware_failed)
+
+    def _bootloader_ready(self, drive):
+        if drive is None:
+            self._set_busy(False)
+            self._set_status("부트로더 드라이브를 찾지 못했습니다.", ERR_C)
+            self._set_hint("부트로더 키가 안 먹으면 리셋 버튼을 빠르게 두 번 누르세요.")
+            return
+        self._set_busy(True, "%s 에 쓰는 중…" % drive)
+
+        def done(name):
+            self._set_busy(False)
+            self._set_status("플래싱 완료: %s" % name, OK_C)
+            self._set_hint("키보드가 재부팅됩니다. 다시 연결되면 [USB로 연결] 또는 "
+                           "[블루투스로 연결]을 누르세요.")
+            self.disconnect()
+
+        self.worker.submit(lambda: firmware.flash(FIRMWARE_DIR, "left", drive),
+                           done, self._firmware_failed)
+
+    def _firmware_failed(self, exc):
+        self._set_busy(False)
+        self._set_status("펌웨어 작업 실패: %s" % exc, ERR_C)
 
     # -- persistence --------------------------------------------------------
 

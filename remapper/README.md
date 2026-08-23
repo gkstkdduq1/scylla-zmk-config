@@ -110,6 +110,42 @@ Learned from the ZMK sources and verified against a live keyboard:
 python -m grpc_tools.protoc -Iproto --python_out=scyllamap proto\*.proto
 ```
 
+## Assigning behaviors that cannot be pressed
+
+Pressing the key you want is the right gesture for a key press. It is no help
+for "toggle the output endpoint" or "select BLE profile 2" — there is nothing to
+press. **다른 기능…** opens a list for those.
+
+The list is built entirely from what the keyboard reports: every behavior ships
+its display name, and every parameter ships either named constants, a layer
+reference, a HID usage or a numeric range. Nothing behavior-specific is
+hardcoded, so a firmware with new behaviors populates the dialog on its own.
+
+## Firmware update
+
+**펌웨어 업데이트** fetches the latest published build and writes it to the left
+half. Entering the bootloader is the one step that cannot be automated — the
+Studio RPC has no reboot request and this bootloader does not implement the
+1200-baud-touch reset — but the keymap's `&bootloader` key does it without
+reaching for the reset button.
+
+Builds are published as GitHub **release assets**, not Actions artifacts:
+artifacts require a token to download even on a public repo, so an unauthenticated
+app cannot fetch them.
+
+## What the app can and cannot show
+
+| | |
+| --- | --- |
+| battery, both halves | shown (BLE only — see above) |
+| whether this machine has a cable / a BLE link | shown |
+| **which endpoint the keyboard is sending to** | not knowable here |
+| **active BLE profile index** | not knowable here |
+
+The RPC's subsystems — `core`, `behaviors`, `keymap` — are fixed in ZMK itself,
+so a module cannot add an endpoint or profile request. When both links are up,
+the status report key is the only way to tell them apart.
+
 ## Limits
 
 Key cap text comes from the keyboard, not from a table here: every behavior
