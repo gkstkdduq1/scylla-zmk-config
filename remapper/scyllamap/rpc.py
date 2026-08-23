@@ -74,7 +74,9 @@ class Connection:
         while not self._stop.is_set():
             try:
                 chunk = self._serial.read(256)
-            except (OSError, serial.SerialException):
+            except Exception:
+                # Closing the port from another thread surfaces here in several
+                # different shapes depending on the platform; all mean "done".
                 break
             for b in chunk:
                 if escaped:

@@ -1,13 +1,17 @@
-"""Press-to-remap GUI for a ZMK keyboard.
+"""The remap editor window.
 
-The point of this tool: you pick the key by PRESSING it on the keyboard, and you
-pick what goes there by PRESSING that too. No dropdown hunting.
+You pick the key by PRESSING it on the keyboard, and you pick what goes there by
+PRESSING that too. No dropdown hunting.
 
 Identifying which physical key was pressed is the hard part - ZMK's Studio RPC
 has no key-event notification, so the keyboard never tells us "position 34 was
-pressed". We work around it: temporarily paint all 58 positions with distinct
-probe keycodes, read which one arrives, then discard. Because Studio stages
-edits until an explicit save, the probe never touches saved settings.
+pressed". We work around it: temporarily paint all positions with distinct probe
+keycodes, read which one arrives, then discard. Because Studio stages edits until
+an explicit save, the probe never touches saved settings.
+
+The window holds the serial port only while it is visible. A COM port is
+exclusive on Windows, so staying connected in the background would lock ZMK
+Studio out of the keyboard.
 """
 
 import os
@@ -19,6 +23,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import rpc             # noqa: E402
 import keycodes as kc  # noqa: E402
+import labels          # noqa: E402
 
 BEHAVIOR_KEY_PRESS = 2
 UNIT = 0.46          # px per physical-layout unit (100 units == 1u key)
@@ -28,36 +33,37 @@ BG = "#1b1d21"
 KEY_BG = "#2a2e34"
 KEY_SEL = "#3d6fd6"
 KEY_TARGET = "#c8781e"
+KEY_HOVER = "#343a42"
 FG = "#e6e6e6"
 DIM = "#8b9199"
 OK_C = "#7fd67f"
 WARN_C = "#e0a76c"
 ERR_C = "#e06c6c"
 
-LAYER_LABELS = {6: "MO %d", 13: "TO %d", 14: "TOG %d", 11: "SL %d"}
-PLAIN_LABELS = {1: "CapsWd", 3: "GrEsc", 4: "Repeat", 9: "None", 12: "Reset",
-                16: "Boot", 18: "Unlock", 19: "TRANS", 8: "ModTap", 7: "LT",
-                15: "BT", 17: "OUT"}
 
-
-class App(tk.Tk):
-    def __init__(self):
+class EditorWindow(tk.Tk):
+    def __init__(self, on_hide=None):
         super().__init__()
         self.title("Scylla Remapper")
         self.configure(bg=BG)
+        self.geometry("700x520")
+        self._on_hide = on_hide
+
         self.conn = None
+        self.catalog = None
         self.keymap = None
         self.layout = None
         self.layer_index = 0
         self.selected = None      # key position
+        self.hovered = None
         self.mode = "idle"        # idle | probe | capture
         self._probe_map = {}
         self._key_items = {}
+        self._rect_of = {}
 
         self._build_ui()
         self.bind_all("<KeyPress>", self._on_key)
-        self.protocol("WM_DELETE_WINDOW", self._on_close)
-        self.after(100, self.connect)
+        self.protocol("WM_DELETE_WINDOW", self.hide)
 
     # -- ui -----------------------------------------------------------------
 
@@ -65,8 +71,8 @@ class App(tk.Tk):
         top = tk.Frame(self, bg=BG)
         top.pack(fill="x", padx=PAD, pady=(PAD, 6))
 
-        self.status = tk.Label(top, text="connecting...", bg=BG, fg=FG,
-                               anchor="w", font=("Segoe UI", 10))
+        self.status = tk.Label(top, text="", bg=BG, fg=FG, anchor="w",
+                               font=("Segoe UI", 10))
         self.status.pack(side="left")
 
         self.btn_save = tk.Button(top, text="저장", command=self.save,
@@ -90,10 +96,16 @@ class App(tk.Tk):
         self.canvas = tk.Canvas(self, bg=BG, highlightthickness=0, height=330)
         self.canvas.pack(fill="both", expand=True, padx=PAD, pady=10)
         self.canvas.bind("<Button-1>", self._on_click)
+        self.canvas.bind("<Motion>", self._on_motion)
+        self.canvas.bind("<Leave>", lambda _e: self._set_hover(None))
+
+        self.detail = tk.Label(self, text="", bg=BG, fg=FG, anchor="w",
+                               font=("Segoe UI", 10, "bold"))
+        self.detail.pack(fill="x", padx=PAD)
 
         self.hint = tk.Label(self, text="", bg=BG, fg=DIM, anchor="w",
                              justify="left", font=("Segoe UI", 10))
-        self.hint.pack(fill="x", padx=PAD, pady=(0, PAD))
+        self.hint.pack(fill="x", padx=PAD, pady=(2, PAD))
 
     def _set_status(self, text, color=FG):
         self.status.config(text=text, fg=color)
@@ -101,7 +113,33 @@ class App(tk.Tk):
     def _set_hint(self, text, color=DIM):
         self.hint.config(text=text, fg=color)
 
-    # -- connection ---------------------------------------------------------
+    # -- show / hide, connection lifecycle ----------------------------------
+
+    def show(self):
+        self.deiconify()
+        self.lift()
+        self.focus_force()
+        if self.conn is None:
+            self.connect()
+
+    def hide(self):
+        if self.mode == "probe":
+            self._end_probe()
+        self.withdraw()
+        self.disconnect()
+        if self._on_hide:
+            self._on_hide()
+
+    def disconnect(self):
+        if self.conn:
+            try:
+                self.conn.close()
+            except Exception:
+                pass
+        self.conn = None
+        self.catalog = None
+        self.canvas.delete("all")
+        self._key_items.clear()
 
     def connect(self):
         ports = rpc.find_ports()
@@ -115,7 +153,10 @@ class App(tk.Tk):
             self.conn = rpc.Connection(port)
             info = self.conn.device_info()
         except Exception as exc:
+            self.conn = None
             self._set_status("연결 실패: %s" % exc, ERR_C)
+            self._set_hint("ZMK Studio가 켜져 있으면 닫아주세요. "
+                           "포트는 한 프로그램만 쓸 수 있습니다.")
             return
 
         locked = self.conn.lock_state() != 1
@@ -130,16 +171,22 @@ class App(tk.Tk):
         self.refresh()
 
     def _poll_lock(self):
+        if self.conn is None:
+            return
         try:
             if self.conn.lock_state() == 1:
                 self._set_status("편집 가능", OK_C)
                 self.refresh()
                 return
         except Exception:
-            pass
+            return
         self.after(700, self._poll_lock)
 
     def refresh(self):
+        if self.conn is None:
+            return
+        if self.catalog is None:
+            self.catalog = labels.Catalog(self.conn)
         self.keymap = self.conn.get_keymap()
         pls = self.conn.get_physical_layouts()
         self.layout = pls.layouts[pls.active_layout_index]
@@ -171,7 +218,8 @@ class App(tk.Tk):
     def draw(self):
         self.canvas.delete("all")
         self._key_items.clear()
-        if not self.layout:
+        self._rect_of.clear()
+        if not self.layout or not self.keymap:
             return
         layer = self.keymap.layers[self.layer_index]
         for pos, k in enumerate(self.layout.keys):
@@ -179,26 +227,48 @@ class App(tk.Tk):
             y0 = k.y * UNIT + 10
             x1 = x0 + k.width * UNIT - 3
             y1 = y0 + k.height * UNIT - 3
-            fill = KEY_BG
-            if pos == self.selected:
-                fill = KEY_TARGET if self.mode == "capture" else KEY_SEL
-            rect = self.canvas.create_rectangle(x0, y0, x1, y1, fill=fill,
+            rect = self.canvas.create_rectangle(x0, y0, x1, y1,
+                                                fill=self._fill_for(pos),
                                                 outline="#0f1113", width=1)
-            label = (self._binding_label(layer.bindings[pos])
-                     if pos < len(layer.bindings) else "?")
             text = self.canvas.create_text((x0 + x1) / 2, (y0 + y1) / 2,
-                                           text=label, fill=FG,
-                                           font=("Segoe UI", 8),
+                                           text=self._label(layer, pos),
+                                           fill=FG, font=("Segoe UI", 8),
                                            width=k.width * UNIT - 6)
             self._key_items[rect] = pos
             self._key_items[text] = pos
+            self._rect_of[pos] = rect
 
-    def _binding_label(self, b):
-        if b.behavior_id in (BEHAVIOR_KEY_PRESS, 5, 10):
-            return kc.key_label(b.param1)
-        if b.behavior_id in LAYER_LABELS:
-            return LAYER_LABELS[b.behavior_id] % b.param1
-        return PLAIN_LABELS.get(b.behavior_id, "b%d" % b.behavior_id)
+    def _fill_for(self, pos):
+        if pos == self.selected:
+            return KEY_TARGET if self.mode == "capture" else KEY_SEL
+        if pos == self.hovered:
+            return KEY_HOVER
+        return KEY_BG
+
+    def _label(self, layer, pos):
+        if pos >= len(layer.bindings):
+            return "?"
+        return self.catalog.label(layer.bindings[pos], self.keymap.layers)
+
+    def _set_hover(self, pos):
+        if pos == self.hovered:
+            return
+        prev, self.hovered = self.hovered, pos
+        for p in (prev, pos):
+            if p is not None and p in self._rect_of:
+                self.canvas.itemconfig(self._rect_of[p], fill=self._fill_for(p))
+        if pos is None or not self.keymap:
+            self.detail.config(text="")
+            return
+        layer = self.keymap.layers[self.layer_index]
+        if pos < len(layer.bindings):
+            self.detail.config(
+                text="%d번  %s" % (pos, self.catalog.describe(
+                    layer.bindings[pos], self.keymap.layers)))
+
+    def _on_motion(self, evt):
+        item = self.canvas.find_withtag("current")
+        self._set_hover(self._key_items.get(item[0]) if item else None)
 
     # -- interaction --------------------------------------------------------
 
@@ -207,7 +277,7 @@ class App(tk.Tk):
         self.draw()
 
     def _on_click(self, evt):
-        if self.mode == "probe":
+        if self.mode == "probe" or not self.keymap:
             return
         item = self.canvas.find_closest(evt.x, evt.y)
         if not item:
@@ -215,6 +285,9 @@ class App(tk.Tk):
         pos = self._key_items.get(item[0])
         if pos is None:
             return
+        self._begin_capture(pos)
+
+    def _begin_capture(self, pos):
         self.selected = pos
         self.mode = "capture"
         self.draw()
@@ -281,9 +354,7 @@ class App(tk.Tk):
             if pos is None:
                 return "break"
             self._end_probe()
-            self.selected = pos
-            self.mode = "capture"
-            self.draw()
+            self._begin_capture(pos)
             self._set_hint("%d번 자리를 선택했습니다. 이제 넣을 키를 누르세요."
                            "   (Esc = 취소)" % pos, WARN_C)
             return "break"
@@ -349,20 +420,21 @@ class App(tk.Tk):
         self.refresh()
         self._set_hint("마지막 저장 시점으로 되돌렸습니다.")
 
-    def _on_close(self):
-        # Never leave a probe keymap staged on the keyboard.
+    def shutdown(self):
         if self.mode == "probe" and self.conn:
             try:
                 self.conn.discard_changes()
             except Exception:
                 pass
-        if self.conn:
-            self.conn.close()
+        self.disconnect()
         self.destroy()
 
 
 def main():
-    App().mainloop()
+    win = EditorWindow()
+    win.show()
+    win.protocol("WM_DELETE_WINDOW", win.shutdown)
+    win.mainloop()
 
 
 if __name__ == "__main__":

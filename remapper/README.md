@@ -5,11 +5,29 @@ pick what goes there by **pressing that too**. No dropdown hunting.
 
 ```powershell
 pip install -r requirements.txt
-.\run.ps1
+.\run.ps1      # open the window
+.\tray.ps1     # start hidden in the notification area
 ```
 
 **Close ZMK Studio first.** The serial port is exclusive — only one app can hold
-it at a time.
+it at a time. For the same reason the tray app connects only while its window is
+open and releases the port when you close it, so leaving it resident does not
+lock Studio out.
+
+## Tray and startup
+
+`tray.ps1` puts an icon in the notification area. Left-click opens the window;
+right-click gives **열기 / Windows 시작 시 실행 / 종료**.
+
+The startup toggle writes a shortcut to your Startup folder:
+
+```
+%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\Scylla Remapper.lnk
+```
+
+A shortcut rather than a registry Run key — it needs no elevation, and it shows
+up in Explorer and in Task Manager's Startup tab where you would expect to find
+it. It launches `pythonw.exe`, so there is no console window.
 
 ## How it works
 
@@ -53,7 +71,10 @@ Learned from the ZMK sources and verified against a live keyboard:
 | --- | --- |
 | `scyllamap/rpc.py` | framing, request/response correlation, subsystem wrappers |
 | `scyllamap/keycodes.py` | HID usage tables, Windows VK translation, probe set |
-| `scyllamap/gui.py` | the app |
+| `scyllamap/gui.py` | the remap window |
+| `scyllamap/labels.py` | renders bindings from the firmware's own metadata |
+| `scyllamap/app.py` | tray icon, entry point |
+| `scyllamap/startup.py` | Startup-folder shortcut |
 | `proto/` | ZMK Studio `.proto` files, vendored from zmk-studio-messages |
 
 `*_pb2.py` are generated. To regenerate after updating `proto/`:
@@ -63,6 +84,12 @@ python -m grpc_tools.protoc -Iproto --python_out=scyllamap proto\*.proto
 ```
 
 ## Limits
+
+Key cap text comes from the keyboard, not from a table here: every behavior
+parameter arrives with a name (`Select Profile`, `BLE Output`, ...), so a
+firmware with extra behaviors labels itself. The abbreviation tables in
+`labels.py` only shorten text to fit a key cap and fall back to the firmware's
+own wording, so they cannot make a label wrong.
 
 Assigns **Key Press** bindings only — that is what "press the key you want"
 means. Layer-taps, mod-taps, combos and macros still need ZMK Studio or a
