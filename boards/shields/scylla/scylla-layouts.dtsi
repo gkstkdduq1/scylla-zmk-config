@@ -1,13 +1,24 @@
+/*
+ * Scylla 4x6+5 physical layout: 58 keys on a 1u grid.
+ *
+ * ZMK Studio needs a zmk,physical-layout to draw the board, and its key
+ * order must match the matrix transform in scylla.dtsi exactly - both walk
+ * left half then right half, row by row, thumbs last.
+ *
+ * SPDX-License-Identifier: MIT
+ */
+
 #include <physical_layouts.dtsi>
 
 / {
     scylla_layout: scylla_layout {
         compatible = "zmk,physical-layout";
-        display-name = "scylla";
+        display-name = "Scylla";
 
         transform = <&scylla_transform>;
 
         keys  //                     w   h    x    y     rot    rx    ry
+
             = <&key_physical_attrs 100 100    0    0       0     0     0>
             , <&key_physical_attrs 100 100  100    0       0     0     0>
             , <&key_physical_attrs 100 100  200    0       0     0     0>
@@ -67,6 +78,5 @@
             , <&key_physical_attrs 100 100  700  500       0     0     0>
             , <&key_physical_attrs 100 100  800  500       0     0     0>
             ;
-   };
-
+    };
 };

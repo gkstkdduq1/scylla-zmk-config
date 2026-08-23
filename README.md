@@ -1,65 +1,80 @@
-# Scylla — ZMK config with ZMK Studio
+# Scylla — wireless ZMK config + a press-to-remap app
 
-Wireless Scylla (4x6+5, 58 keys) on Pro Micro nRF52840 controllers, **no dongle**:
-left half is BLE central, right half is peripheral.
+A dongle-less wireless [Scylla](https://bastardkb.com/scylla/) (4x6+5, 58 keys) on
+Pro Micro nRF52840 controllers, and a desktop app that remaps it the way a mouse
+utility would: **press the key you want to change, then press what goes there.**
 
-The point of this config is **ZMK Studio**: after one flash you remap keys from a
-GUI, live, without ever rebuilding firmware again.
+![The remapper](docs/remapper.png)
 
-## Build
+Three parts:
 
-Push this repo to GitHub. The Actions workflow builds on every push and produces
-a `firmware` artifact containing:
-
-| file | flash to |
+| | |
 | --- | --- |
-| `scylla_left_studio-nice_nano-zmk.uf2` | left half (central, Studio-enabled) |
-| `scylla_right-nice_nano-zmk.uf2` | right half (peripheral) |
-| `settings_reset-nice_nano-zmk.uf2` | either half, to wipe pairing/settings |
+| [`config/`](config), [`boards/`](boards) | ZMK config for the keyboard, with ZMK Studio enabled |
+| [`src/`](src) | a custom ZMK behavior that types out the connection status |
+| [`remapper/`](remapper) | the app — Python, talks the ZMK Studio RPC over USB **or Bluetooth** |
 
-To flash: double-tap the reset button, a `NICENANO` USB drive appears, drag the
-`.uf2` onto it. `flash.ps1` automates the waiting-and-copying half:
+---
+
+## Why the app exists
+
+ZMK Studio already edits keymaps live. Two things pushed this further:
+
+**You cannot press the key you want to change.** Studio's RPC has no key-event
+notification, so the keyboard never tells a host "position 34 was pressed" — you
+click it on screen instead. The app works around that by briefly painting all 58
+positions with distinct probe keycodes, reading which one arrives, then
+discarding. Studio stages edits until an explicit save, so probing can never
+damage saved settings.
+
+**Bluetooth works on Windows.** ZMK's docs list BLE editing as Linux-only, but
+that is a limit of the Studio app, not the platform. `CONFIG_ZMK_STUDIO_TRANSPORT_BLE`
+is `default y`, so the firmware already exposes the RPC over GATT — see
+[`remapper/README.md`](remapper/README.md) for the two gotchas that make it work.
+
+Battery for both halves comes free with the BLE connection: the split central
+proxies its peripheral as a second Battery Service.
+
+---
+
+## Firmware
+
+Every push builds in Actions and publishes the `.uf2` files as a
+[release](../../releases). To flash by hand:
 
 ```powershell
-.lash.ps1 left     # plug the LEFT half in first, then run this, then double-tap reset
-.lash.ps1 right    # move the cable to the RIGHT half
-.lash.ps1 reset    # settings_reset — only if the halves refuse to pair
+.\flash.ps1 left     # plug the LEFT half in, run this, then double-tap reset
+.\flash.ps1 right    # move the cable to the RIGHT half
+.\flash.ps1 reset    # settings_reset — only if the halves refuse to pair
 ```
 
 Only the half physically connected by USB shows a bootloader drive, so flash one
-half at a time and move the cable between them.
+half at a time. The app can do this for you: **펌웨어 업데이트** downloads the
+latest release and writes it once you enter the bootloader.
 
-## Using ZMK Studio
-
-1. Install the native app from https://zmk.studio/download (Windows build exists).
-2. **Plug the LEFT half into the PC with USB-C.**
-   On Windows, Studio's BLE transport is not supported — Windows' Bluetooth stack
-   will not hand out GATT access to a device paired as HID. USB is the only route
-   here. macOS and Linux can do it over BLE.
-3. Connect in the app, then press the **Studio Unlock** chord: hold **Lower**
-   (left inner thumb, `&mo 1`) and press the **bottom-left corner key** (the one
-   that is `LCTRL` on the base layer). Without unlocking, Studio is read-only.
-
-   Also added on that layer: **Lower + bottom-right corner key** (`BSLH` on the base layer) = `&bootloader`,
-   so you can enter flash mode without reaching for the reset button.
-4. Remap, then Save. Changes are written to the keyboard's flash and survive
-   unplugging — the keyboard keeps them on any host it connects to.
-
-Don't want the unlock step? Set `CONFIG_ZMK_STUDIO_LOCKING=n` in
-`config/scylla.conf` and reflash the left half once.
+| file | flash to |
+| --- | --- |
+| `scylla_left_studio.uf2` | left half (central, Studio-enabled) |
+| `scylla_right.uf2` | right half (peripheral) |
+| `settings_reset.uf2` | either half, to wipe pairing/settings |
 
 ### The one gotcha
 
-Once you save anything in Studio, the keyboard runs from flash settings and
-**ignores `config/scylla.keymap`**. Later edits to that file do nothing until you
-run "Restore Stock Settings" in Studio. Pick one source of truth: either edit the
-file and rebuild, or edit in Studio. Studio is the whole point here, so the file
-is just the seed/fallback.
+Once you save anything from Studio or the app, the keyboard runs from flash
+settings and **ignores `config/scylla.keymap`**. Later edits to that file do
+nothing until you run "Restore Stock Settings", which discards everything you
+changed live. Pick one source of truth — the file is the seed and the fallback.
+
+Firmware is still needed for combos, macros, hold-tap tuning, extra layers and
+new behavior types. Placing an *existing* behavior on a key is always a software
+job, no reflash.
+
+---
 
 ## Status report key
 
-`Lower` + the key one to the right of the bottom-left corner types the current
-connection state wherever the cursor is:
+`Lower` + the key right of the bottom-left corner types the current state
+wherever the cursor is:
 
 ```
 out=ble prof=2 conn=1 batt=96/100
@@ -67,51 +82,70 @@ out=ble prof=2 conn=1 batt=96/100
 
 | field | meaning |
 | --- | --- |
-| `out` | endpoint actually in use. `out=ble?usb` means USB is preferred but not connected |
+| `out` | endpoint in use. `out=ble?usb` means USB is preferred but not connected |
 | `prof` | active BLE profile index |
 | `conn` | 1 if that profile has a live connection, 0 if only bonded |
 | `batt` | this half / the other half |
 
-This exists because nothing else can report it. The Studio RPC has only
-`core`, `behaviors` and `keymap` subsystems and no endpoint, profile or battery
-request, so no host application — Studio included — can ask the keyboard which
-output or profile is live. The keyboard has to volunteer it, and the channel it
-always has is the keystrokes it is already sending.
+Nothing else can report this. The Studio RPC has only `core`, `behaviors` and
+`keymap` subsystems — no endpoint, profile or battery request — and those
+subsystems are fixed in ZMK itself, so a module cannot add one. The keyboard has
+to volunteer it, and the channel it always has is the keystrokes it already
+sends. Battery is included because the BLE Battery Services are unreachable over
+USB, making this the only way to see both halves on a cable.
 
-Battery is in there because the BLE Battery Services are unreachable over USB;
-this is the only way to see both halves on a cable.
+Output is lowercase ASCII; a Hangul/Kana IME will transliterate the letters, so
+switch to English first. The app reads raw scancodes and is unaffected.
 
-The output is lowercase ASCII, but a Hangul/Kana IME will still transliterate
-the letters — switch to English first. The companion app in `remapper/` reads
-raw scancodes, so IME state does not affect it.
+Implemented in [`src/behavior_status_report.c`](src/behavior_status_report.c),
+which makes this repo a Zephyr module. It types via
+`raise_zmk_keycode_state_changed_from_encoded` — the entry point `&kp` uses — so
+it rides ZMK's normal pipeline rather than poking HID, and does not depend on the
+layout of `zmk_behavior_binding`, which gains a field when
+`CONFIG_ZMK_BEHAVIOR_LOCAL_IDS_IN_BINDINGS` is set.
 
-Implemented in `src/behavior_status_report.c`, which makes this repo a Zephyr
-module. It types via `raise_zmk_keycode_state_changed_from_encoded` — the same
-entry point `&kp` uses — so it rides ZMK's normal pipeline instead of poking HID,
-and it does not depend on the layout of `zmk_behavior_binding`, which gains a
-field when `CONFIG_ZMK_BEHAVIOR_LOCAL_IDS_IN_BINDINGS` is set.
+---
 
-## Layout notes
+## Using ZMK Studio
+
+The official app still works alongside this one. Over USB only one program can
+hold the serial port, so close one before opening the other; the remapper
+releases the port whenever its window is closed.
+
+Unlock chord: hold **Lower** and press the **bottom-left corner key** (`LCTRL` on
+the base layer). Without it Studio and the app are read-only. To skip the step,
+set `CONFIG_ZMK_STUDIO_LOCKING=n` in `config/scylla.conf` and reflash the left
+half. The keyboard re-locks after 10 minutes idle and on disconnect.
+
+---
+
+## Shield notes
 
 Studio needs the keymap to come from a `zmk,physical-layout`, not a
-`chosen zmk,matrix_transform`. The upstream community shield had the layout file
-orphaned (it referenced a `&scylla_transform` label that didn't exist and was
-never `#include`d), which is why Studio only worked on their dongle build. Fixed
-here in `boards/shields/scylla/`:
+`chosen zmk,matrix_transform`:
 
-- `scylla.dtsi` — kscan matrix + `scylla_transform`, no `chosen` transform
-- `scylla-layouts.dtsi` — the 58-key `zmk,physical-layout` Studio draws
+- `boards/shields/scylla/scylla.dtsi` — kscan matrix and `scylla_transform`, with
+  no `chosen` transform
+- `boards/shields/scylla/scylla-layouts.dtsi` — the 58-key physical layout Studio
+  draws, generated from the board geometry so its order matches the transform
 
-Shield base adapted from https://github.com/amadeusolofsson/zmk-scylla — its
-row/col GPIO mapping is byte-identical to the pin mapping in the working 2023
-config at https://github.com/gkstkdduq1/zmk-config, so the wiring is confirmed.
+The row/column GPIO mapping matches the working 2023 config at
+[gkstkdduq1/zmk-config](https://github.com/gkstkdduq1/zmk-config), which is where
+the base keymap (QWERTY + lower + raise) also comes from.
 
-The keymap in `config/scylla.keymap` is ported from that same 2023 config
-(QWERTY base + lower + raise), plus the two keys listed above.
+Thanks to [amadeusolofsson/zmk-scylla](https://github.com/amadeusolofsson/zmk-scylla)
+for a working Scylla shield to start from. That repo carries no license, so
+nothing is copied from it here — the shield files were rewritten or regenerated,
+and the pin mapping is the board's own wiring.
 
-## Pro Micro nRF52840 clones (SuperMini etc.)
+### Pro Micro nRF52840 clones (SuperMini etc.)
 
-The build targets `nice_nano//zmk`, which defaults to nice!nano **v2**. Clones are
-pin-compatible so keys work fine, but the battery voltage divider differs — the
-reported battery percentage may be wrong or pinned. If that matters, the divider
-can be redefined in a board overlay; ask and it's a small addition.
+The build targets `nice_nano//zmk`, which defaults to nice!nano **v2**. Clones
+are pin-compatible so keys work, but the battery voltage divider differs and the
+reported percentage may be wrong. It can be redefined in a board overlay.
+
+---
+
+## License
+
+MIT — see [LICENSE](LICENSE). ZMK itself is MIT.
