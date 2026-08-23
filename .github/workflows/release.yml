@@ -23,16 +23,19 @@ jobs:
         id: build
         env:
           GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          RUN_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          if [ "$EVENT" = "workflow_dispatch" ]; then
             run_id=$(gh run list --repo "$GITHUB_REPOSITORY" \
               --workflow "Build ZMK firmware" --branch master \
               --status success --limit 1 --json databaseId -q '.[0].databaseId')
             sha=$(gh run view "$run_id" --repo "$GITHUB_REPOSITORY" --json headSha -q .headSha)
           else
-            run_id="${{ github.event.workflow_run.id }}"
-            sha="${{ github.event.workflow_run.head_sha }}"
+            run_id="$RUN_ID"
+            sha="$RUN_SHA"
           fi
           echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
@@ -41,10 +44,10 @@ jobs:
       - name: Download firmware
         env:
           GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ steps.build.outputs.run_id }}
         run: |
           set -euo pipefail
-          gh run download "${{ steps.build.outputs.run_id }}" \
-            --repo "$GITHUB_REPOSITORY" --dir artifacts
+          gh run download "$RUN_ID" --repo "$GITHUB_REPOSITORY" --dir artifacts
           mkdir -p out
           find artifacts -name '*.uf2' -exec cp {} out/ \;
           ls -la out
@@ -52,17 +55,16 @@ jobs:
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
+          SHA: ${{ steps.build.outputs.sha }}
+          SHORT: ${{ steps.build.outputs.short }}
         run: |
           set -euo pipefail
-          tag="fw-${{ steps.build.outputs.short }}"
+          tag="fw-$SHORT"
           if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release delete "$tag" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag
           fi
           gh release create "$tag" out/*.uf2 \
             --repo "$GITHUB_REPOSITORY" \
-            --target "${{ steps.build.outputs.sha }}" \
-            --title "Firmware ${{ steps.build.outputs.short }}" \
-            --notes "Built from ${{ steps.build.outputs.sha }}.
-
-Flash \`scylla_left_studio.uf2\` to the left half and \`scylla_right.uf2\` to the
-right. \`settings_reset.uf2\` only if the halves refuse to pair."
+            --target "$SHA" \
+            --title "Firmware $SHORT" \
+            --notes "Built from $SHA. Flash scylla_left_studio.uf2 to the left half and scylla_right.uf2 to the right; settings_reset.uf2 only if the halves refuse to pair."
