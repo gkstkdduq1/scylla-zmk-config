@@ -246,6 +246,14 @@ static int on_keymap_binding_released(struct zmk_behavior_binding *binding,
 static const struct behavior_driver_api behavior_status_report_driver_api = {
     .binding_pressed = on_keymap_binding_pressed,
     .binding_released = on_keymap_binding_released,
+#if IS_ENABLED(CONFIG_ZMK_BEHAVIOR_METADATA)
+    /*
+     * Required even though this behavior takes no parameters. Studio validates
+     * every binding against a behavior's metadata, and a behavior that reports
+     * none at all fails that check - assigning it returns INVALID_PARAMETERS.
+     */
+    .get_parameter_metadata = zmk_behavior_get_empty_param_metadata,
+#endif
 };
 
 #define SR_INST(n)                                                                                 \
