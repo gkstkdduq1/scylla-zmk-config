@@ -9,10 +9,12 @@ pip install -r requirements.txt
 .\tray.ps1     # start hidden in the notification area
 ```
 
-**Close ZMK Studio first.** The serial port is exclusive — only one app can hold
-it at a time. For the same reason the tray app connects only while its window is
-open and releases the port when you close it, so leaving it resident does not
-lock Studio out.
+It connects over **USB if the cable is in, otherwise Bluetooth**.
+
+**Over USB, close ZMK Studio first** — the serial port is exclusive, only one app
+can hold it. For the same reason the window releases the port when you close it,
+so leaving the tray app resident does not lock Studio out. BLE has no such
+conflict.
 
 ## Tray and startup
 
@@ -51,6 +53,31 @@ nothing was ever written to flash.
 
 Because a discard is all-or-nothing, the probe refuses to run while there are
 unsaved changes. Save or revert them first; the app tells you when this happens.
+
+## Bluetooth
+
+ZMK's docs list BLE editing as Linux-only, but that is a limit of the Studio app,
+not of Windows. The firmware exposes the RPC over GATT whenever
+`CONFIG_ZMK_STUDIO_TRANSPORT_BLE` is set, which is `default y` on any BLE build —
+so no reflash was needed. Verified working here against a keyboard paired to
+Windows as an HID device.
+
+Two things had to be right:
+
+- **Finding the keyboard.** A bonded ZMK keyboard stops advertising, so scanning
+  never sees it. Windows still lists it as a paired device, and WinRT can connect
+  to a paired device by address — so we read the address out of the
+  `BTHLE\DEV_*` PnP entries and hand it straight to bleak, skipping discovery.
+- **Writing.** The RPC characteristic is `write` + `indicate`, not
+  write-without-response, so writes must be acknowledged and chunked to MTU − 3.
+
+## Battery
+
+Both halves, read over BLE. The split central proxies its peripherals as extra
+Battery Service instances; the peripheral's carries a `0x2901` user description
+(`Peripheral 0`), and the one without it is the central. That is the only way the
+keyboard reports this — the Studio RPC has no battery request at all, so a USB
+connection cannot show it.
 
 ## Protocol notes
 

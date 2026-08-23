@@ -9,9 +9,12 @@ pressed". We work around it: temporarily paint all positions with distinct probe
 keycodes, read which one arrives, then discard. Because Studio stages edits until
 an explicit save, the probe never touches saved settings.
 
-The window holds the serial port only while it is visible. A COM port is
-exclusive on Windows, so staying connected in the background would lock ZMK
-Studio out of the keyboard.
+All keyboard I/O goes through a Worker. Every RPC blocks until the keyboard
+replies, so doing it inline would freeze the window.
+
+Over USB the serial port is exclusive, so the window connects only while it is
+visible and releases the port when hidden - otherwise ZMK Studio could never
+reach the keyboard. BLE has no such conflict.
 """
 
 import os
@@ -24,6 +27,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import rpc             # noqa: E402
 import keycodes as kc  # noqa: E402
 import labels          # noqa: E402
+import worker          # noqa: E402
 
 BEHAVIOR_KEY_PRESS = 2
 UNIT = 0.46          # px per physical-layout unit (100 units == 1u key)
@@ -41,26 +45,65 @@ WARN_C = "#e0a76c"
 ERR_C = "#e06c6c"
 
 
+def read_batteries(conn):
+    """-> [(label, percent)] with the halves named, or [] if unavailable.
+
+    Only BLE carries this: the split central proxies its peripherals' levels as
+    extra Battery Service instances, and the Studio RPC has no battery request
+    at all, so a USB connection cannot see it.
+    """
+    read = getattr(conn.transport, "read_batteries", None)
+    if read is None:
+        return []
+    out = []
+    for raw_label, percent in read():
+        if percent is None:
+            continue
+        if raw_label and "peripheral" in raw_label.lower():
+            name = "오른쪽"
+        elif raw_label:
+            name = raw_label
+        else:
+            name = "왼쪽"
+        out.append((name, percent))
+    return out
+
+
+class Snapshot:
+    """Everything one refresh needs, fetched on the worker in one go."""
+
+    def __init__(self, conn, catalog=None):
+        self.catalog = catalog or labels.Catalog(conn)
+        self.keymap = conn.get_keymap()
+        pls = conn.get_physical_layouts()
+        self.layout = pls.layouts[pls.active_layout_index]
+        self.dirty = conn.has_unsaved_changes()
+        self.batteries = read_batteries(conn)
+
+
 class EditorWindow(tk.Tk):
     def __init__(self, on_hide=None):
         super().__init__()
         self.title("Scylla Remapper")
         self.configure(bg=BG)
-        self.geometry("700x520")
+        self.geometry("760x560")
         self._on_hide = on_hide
 
+        self.worker = worker.Worker(self)
         self.conn = None
         self.catalog = None
         self.keymap = None
         self.layout = None
         self.layer_index = 0
-        self.selected = None      # key position
+        self.selected = None
         self.hovered = None
         self.mode = "idle"        # idle | probe | capture
+        self.busy = False
         self._probe_map = {}
         self._key_items = {}
         self._rect_of = {}
         self._retry_job = None
+        self._want_ble = False
 
         self._build_ui()
         self.bind_all("<KeyPress>", self._on_key)
@@ -75,6 +118,10 @@ class EditorWindow(tk.Tk):
         self.status = tk.Label(top, text="", bg=BG, fg=FG, anchor="w",
                                font=("Segoe UI", 10))
         self.status.pack(side="left")
+
+        self.battery = tk.Label(top, text="", bg=BG, fg=DIM, anchor="w",
+                                font=("Segoe UI", 10))
+        self.battery.pack(side="left", padx=(14, 0))
 
         self.btn_save = tk.Button(top, text="저장", command=self.save,
                                   state="disabled", width=9)
@@ -93,6 +140,12 @@ class EditorWindow(tk.Tk):
         self.btn_probe = tk.Button(bar, text="키 눌러서 선택",
                                    command=self.start_probe, state="disabled")
         self.btn_probe.pack(side="left")
+
+        self.btn_ble = tk.Button(bar, text="블루투스로 연결",
+                                 command=self.connect_ble)
+        self.btn_ble.pack(side="right")
+        self.btn_usb = tk.Button(bar, text="USB로 연결", command=self.connect_usb)
+        self.btn_usb.pack(side="right", padx=(0, 6))
 
         self.canvas = tk.Canvas(self, bg=BG, highlightthickness=0, height=330)
         self.canvas.pack(fill="both", expand=True, padx=PAD, pady=10)
@@ -114,14 +167,30 @@ class EditorWindow(tk.Tk):
     def _set_hint(self, text, color=DIM):
         self.hint.config(text=text, fg=color)
 
-    # -- show / hide, connection lifecycle ----------------------------------
+    def _set_busy(self, on, note=None):
+        self.busy = on
+        state = "disabled" if on else "normal"
+        for b in (self.btn_probe, self.btn_usb, self.btn_ble):
+            b.config(state=state)
+        if on and note:
+            self._set_status(note, WARN_C)
+
+    # -- show / hide --------------------------------------------------------
 
     def show(self):
         self.deiconify()
         self.lift()
         self.focus_force()
-        if self.conn is None:
-            self.connect()
+        if self.conn is None and not self.busy:
+            self.autoconnect()
+
+    def autoconnect(self):
+        """USB if the cable is in, otherwise BLE. USB is faster and always
+        reachable; BLE needs the keyboard to be on this machine's profile."""
+        if rpc.find_ports():
+            self.connect_usb()
+        else:
+            self.connect_ble()
 
     def hide(self):
         if self.mode == "probe":
@@ -135,103 +204,167 @@ class EditorWindow(tk.Tk):
         if self._retry_job is not None:
             self.after_cancel(self._retry_job)
             self._retry_job = None
-        if self.conn:
-            try:
-                self.conn.close()
-            except Exception:
-                pass
-        self.conn = None
+        conn, self.conn = self.conn, None
         self.catalog = None
+        self.keymap = None
+        if conn:
+            self.worker.submit(conn.close)
         self.canvas.delete("all")
         self._key_items.clear()
 
-    def connect(self):
+    # -- connecting ---------------------------------------------------------
+
+    def connect_usb(self):
+        self._want_ble = False
+        self.disconnect()
         ports = rpc.find_ports()
         if not ports:
             self._set_status("키보드를 찾는 중…", WARN_C)
-            self._set_hint("왼쪽 반쪽을 USB로 연결하세요. "
-                           "연결되면 자동으로 잡습니다.\n"
-                           "Studio 지원 펌웨어가 올라가 있어야 합니다.")
+            self._set_hint("왼쪽 반쪽을 USB로 연결하세요. 연결되면 자동으로 잡습니다.\n"
+                           "무선으로 쓰시려면 [블루투스로 연결]을 누르세요.")
             self._retry_soon()
             return
-        port = ports[0].device
-        try:
-            self.conn = rpc.Connection(port)
-            info = self.conn.device_info()
-        except Exception as exc:
-            self.conn = None
-            self._set_status("연결 실패: %s" % exc, ERR_C)
-            self._set_hint("ZMK Studio가 켜져 있으면 닫아주세요. "
-                           "포트는 한 프로그램만 쓸 수 있습니다.\n"
-                           "계속 재시도합니다.")
-            self._retry_soon()
-            return
+        self._open(lambda: rpc.Connection.open_serial(ports[0].device))
 
-        locked = self.conn.lock_state() != 1
-        self._set_status("%s @ %s - %s" % (info.name, port,
-                                           "잠김" if locked else "편집 가능"),
+    def connect_ble(self):
+        self._want_ble = True
+        self.disconnect()
+        self._set_busy(True, "블루투스 장치를 찾는 중… (최대 8초)")
+        self._set_hint("키보드가 이 PC에 페어링되어 있어야 합니다.")
+        self.worker.submit(lambda: rpc.find_ble_devices(timeout=8.0),
+                           self._ble_found, self._fail)
+
+    def _ble_found(self, devices):
+        self._set_busy(False)
+        if not devices:
+            self._set_status("블루투스로 키보드를 찾지 못했습니다.", ERR_C)
+            self._set_hint(
+                "이 PC에 키보드가 페어링되어 있는지 확인하세요. 그리고 키보드에서 "
+                "해당 BT 프로파일을 선택한 상태여야 합니다.\n"
+                "이미 연결되어 광고를 멈춘 상태라면 검색에 안 잡힐 수 있습니다.")
+            return
+        addr, name = self._best_ble(devices)
+        self._open(lambda: rpc.Connection.open_ble(addr, name))
+
+    def _best_ble(self, devices):
+        """Windows lists every paired BLE device, mice and headsets included.
+        Prefer one whose name looks like this keyboard."""
+        for addr, name in devices:
+            low = (name or "").lower()
+            if "scylla" in low or "zmk" in low:
+                return addr, name
+        return devices[0]
+
+    def _open(self, factory):
+        self._set_busy(True, "연결 중…")
+
+        def job():
+            conn = factory()
+            info = conn.device_info()
+            locked = conn.lock_state() != 1
+            snap = None if locked else Snapshot(conn)
+            return conn, info, locked, snap
+
+        self.worker.submit(job, self._opened, self._fail)
+
+    def _opened(self, result):
+        conn, info, locked, snap = result
+        self._set_busy(False)
+        self.conn = conn
+        self._set_status("%s @ %s (%s) - %s"
+                         % (info.name, conn.describe(), conn.kind,
+                            "잠김" if locked else "편집 가능"),
                          WARN_C if locked else OK_C)
         if locked:
             self._set_hint("키보드에서 Studio Unlock 키를 누르세요 "
                            "(Lower + 좌하단 코너키). 누르면 자동으로 인식합니다.")
             self.after(700, self._poll_lock)
             return
-        self.refresh()
+        self._adopt(snap)
+
+    def _fail(self, exc):
+        self._set_busy(False)
+        self.conn = None
+        self._set_status("연결 실패: %s" % exc, ERR_C)
+        if self._want_ble:
+            self._set_hint("Windows가 HID로 페어링된 장치의 GATT 접근을 막는 "
+                           "경우가 있습니다. USB로도 시도해보세요.")
+        else:
+            self._set_hint("ZMK Studio가 켜져 있으면 닫아주세요. "
+                           "포트는 한 프로그램만 쓸 수 있습니다.\n계속 재시도합니다.")
+            self._retry_soon()
 
     def _retry_soon(self):
-        """Keep looking for the keyboard while the window is open."""
         if self._retry_job is not None:
             self.after_cancel(self._retry_job)
         self._retry_job = self.after(1500, self._retry)
 
     def _retry(self):
         self._retry_job = None
-        if self.conn is not None or self.state() == "withdrawn":
+        if self.conn is not None or self.busy or self._want_ble:
             return
-        self.connect()
+        if self.state() == "withdrawn":
+            return
+        self.connect_usb()
 
     def _poll_lock(self):
-        if self.conn is None:
+        if self.conn is None or self.busy:
             return
-        try:
-            if self.conn.lock_state() == 1:
-                self._set_status("편집 가능", OK_C)
-                self.refresh()
-                return
-        except Exception:
+        self.worker.submit(
+            lambda: self.conn.lock_state() == 1,
+            lambda unlocked: self._adopt_if_unlocked(unlocked),
+            lambda _e: None)
+
+    def _adopt_if_unlocked(self, unlocked):
+        if not unlocked:
+            self.after(700, self._poll_lock)
             return
-        self.after(700, self._poll_lock)
+        self._set_status("편집 가능", OK_C)
+        self.refresh()
+
+    # -- refresh ------------------------------------------------------------
 
     def refresh(self):
         if self.conn is None:
             return
-        if self.catalog is None:
-            self.catalog = labels.Catalog(self.conn)
-        self.keymap = self.conn.get_keymap()
-        pls = self.conn.get_physical_layouts()
-        self.layout = pls.layouts[pls.active_layout_index]
+        self.worker.submit(lambda: Snapshot(self.conn, self.catalog),
+                           self._adopt, self._fail)
+
+    def _adopt(self, snap):
+        if snap is None:
+            return
+        self.catalog = snap.catalog
+        self.keymap = snap.keymap
+        self.layout = snap.layout
         names = [L.name or ("Layer %d" % i)
                  for i, L in enumerate(self.keymap.layers)]
         self.layer_box["values"] = names
         if self.layer_index >= len(names):
             self.layer_index = 0
         self.layer_box.current(self.layer_index)
-        self.btn_probe.config(state="normal")
-        self._update_dirty()
+        self.btn_probe.config(state="disabled" if self.busy else "normal")
+        state = "normal" if snap.dirty else "disabled"
+        self.btn_save.config(state=state)
+        self.btn_discard.config(state=state)
+        self._dirty = snap.dirty
+        self._show_batteries(snap.batteries)
         self.draw()
         if self.mode == "idle":
             self._set_hint("바꿀 키를 캔버스에서 클릭하거나, "
                            "[키 눌러서 선택]을 누르고 키보드에서 그 키를 누르세요.")
 
-    def _update_dirty(self):
-        try:
-            dirty = self.conn.has_unsaved_changes()
-        except Exception:
-            dirty = False
-        state = "normal" if dirty else "disabled"
-        self.btn_save.config(state=state)
-        self.btn_discard.config(state=state)
-        return dirty
+    def _show_batteries(self, batteries):
+        if not batteries:
+            self.battery.config(
+                text="배터리: USB 연결에서는 안 보입니다" if self.conn
+                     and self.conn.kind == "USB" else "")
+            return
+        order = {"왼쪽": 0, "오른쪽": 1}
+        items = sorted(batteries, key=lambda b: order.get(b[0], 9))
+        worst = min(p for _n, p in items)
+        colour = ERR_C if worst <= 15 else (WARN_C if worst <= 30 else DIM)
+        self.battery.config(
+            text="  ".join("%s %d%%" % (n, p) for n, p in items), fg=colour)
 
     # -- drawing ------------------------------------------------------------
 
@@ -297,7 +430,7 @@ class EditorWindow(tk.Tk):
         self.draw()
 
     def _on_click(self, evt):
-        if self.mode == "probe" or not self.keymap:
+        if self.mode == "probe" or not self.keymap or self.busy:
             return
         item = self.canvas.find_closest(evt.x, evt.y)
         if not item:
@@ -314,7 +447,9 @@ class EditorWindow(tk.Tk):
         self._set_hint("이제 이 자리에 넣을 키를 누르세요.   (Esc = 취소)", WARN_C)
 
     def start_probe(self):
-        if self._update_dirty():
+        if self.conn is None or self.busy:
+            return
+        if getattr(self, "_dirty", False):
             messagebox.showwarning(
                 "저장 안 된 변경사항",
                 "키보드에 저장되지 않은 변경사항이 있습니다.\n\n"
@@ -322,37 +457,54 @@ class EditorWindow(tk.Tk):
                 "저장 안 된 편집이 함께 사라집니다.\n\n"
                 "먼저 [저장] 또는 [되돌리기]를 눌러주세요.")
             return
-        try:
-            base = self.keymap.layers[0]
-            self._probe_map = {}
-            for pos in range(len(self.layout.keys)):
-                usage = kc.PROBE_USAGES[pos]
-                self._probe_map[usage] = pos
-                self.conn.set_binding(base.id, pos, BEHAVIOR_KEY_PRESS,
-                                      kc.encode(usage))
-        except Exception as exc:
-            try:
-                self.conn.discard_changes()
-            except Exception:
-                pass
-            messagebox.showerror("탐색 실패", str(exc))
-            return
+
+        base_id = self.keymap.layers[0].id
+        count = len(self.layout.keys)
+        self._probe_map = {kc.PROBE_USAGES[p]: p for p in range(count)}
+        self._set_busy(True, "탐색 준비 중… (%d개 키)" % count)
+
+        def job():
+            for pos in range(count):
+                self.conn.set_binding(base_id, pos, BEHAVIOR_KEY_PRESS,
+                                      kc.encode(kc.PROBE_USAGES[pos]))
+            return True
+
+        self.worker.submit(job, self._probe_ready, self._probe_failed)
+
+    def _probe_ready(self, _ok):
+        self._set_busy(False)
         self.mode = "probe"
         self.focus_force()
+        self._set_status("탐색 중", WARN_C)
         self._set_hint("키보드에서 바꾸고 싶은 키를 누르세요.   (Esc = 취소)\n"
                        "이 창의 포커스를 유지하세요 - 지금 키맵은 임시 상태입니다.",
                        WARN_C)
 
-    def _end_probe(self):
-        try:
-            self.conn.discard_changes()
-        except Exception as exc:
+    def _probe_failed(self, exc):
+        self._set_busy(False)
+        self.mode = "idle"
+        self.worker.submit(self.conn.discard_changes, lambda _r: self.refresh(),
+                           lambda _e: None)
+        messagebox.showerror("탐색 실패", str(exc))
+
+    def _end_probe(self, then=None):
+        self.mode = "idle"
+        self._set_busy(True, "키맵 복구 중…")
+
+        def done(_r):
+            self._set_busy(False)
+            self.refresh()
+            if then:
+                then()
+
+        def failed(exc):
+            self._set_busy(False)
             messagebox.showerror(
                 "복구 실패",
                 "임시 키맵을 되돌리지 못했습니다: %s\n\n"
                 "저장되지 않은 상태라, 키보드 전원을 껐다 켜면 복구됩니다." % exc)
-        self.mode = "idle"
-        self.refresh()
+
+        self.worker.submit(self.conn.discard_changes, done, failed)
 
     def _on_key(self, evt):
         if self.mode == "idle":
@@ -373,13 +525,12 @@ class EditorWindow(tk.Tk):
             pos = self._probe_map.get(usage)
             if pos is None:
                 return "break"
-            self._end_probe()
-            self._begin_capture(pos)
-            self._set_hint("%d번 자리를 선택했습니다. 이제 넣을 키를 누르세요."
-                           "   (Esc = 취소)" % pos, WARN_C)
+            self._end_probe(then=lambda: self._picked(pos))
             return "break"
 
         if self.mode == "capture":
+            if self.busy:
+                return "break"
             usage = kc.VK_TO_USAGE.get(evt.keycode)
             if usage is None:
                 self._set_hint("모르는 키입니다 (VK 0x%02X). 다른 키를 눌러보세요."
@@ -397,63 +548,98 @@ class EditorWindow(tk.Tk):
             return "break"
         return None
 
+    def _picked(self, pos):
+        self._begin_capture(pos)
+        self._set_hint("%d번 자리를 선택했습니다. 이제 넣을 키를 누르세요."
+                       "   (Esc = 취소)" % pos, WARN_C)
+
     def _apply(self, param1):
         layer = self.keymap.layers[self.layer_index]
         pos = self.selected
-        try:
-            resp = self.conn.set_binding(layer.id, pos,
-                                         BEHAVIOR_KEY_PRESS, param1)
-        except Exception as exc:
-            messagebox.showerror("쓰기 실패", str(exc))
-            return
-        if resp != 0:
-            messagebox.showerror("쓰기 거부됨",
-                                 "키보드가 응답 코드 %d 를 반환했습니다." % resp)
-            return
         self.mode = "idle"
         self.selected = None
-        self.refresh()
-        self._set_hint("%s 레이어 %d번 자리를 %s 로 바꿨습니다. "
-                       "[저장]을 눌러야 키보드에 기록됩니다."
-                       % (layer.name, pos, kc.key_label(param1)), OK_C)
+        self._set_busy(True, "쓰는 중…")
+
+        def job():
+            return self.conn.set_binding(layer.id, pos,
+                                         BEHAVIOR_KEY_PRESS, param1)
+
+        def done(resp):
+            self._set_busy(False)
+            if resp != 0:
+                messagebox.showerror(
+                    "쓰기 거부됨",
+                    "키보드가 응답 코드 %d 를 반환했습니다." % resp)
+                return
+            self.refresh()
+            self._set_hint("%s 레이어 %d번 자리를 %s 로 바꿨습니다. "
+                           "[저장]을 눌러야 키보드에 기록됩니다."
+                           % (layer.name, pos, kc.key_label(param1)), OK_C)
+
+        def failed(exc):
+            self._set_busy(False)
+            messagebox.showerror("쓰기 실패", str(exc))
+
+        self.worker.submit(job, done, failed)
 
     # -- persistence --------------------------------------------------------
 
     def save(self):
-        try:
-            res = self.conn.save_changes()
-        except Exception as exc:
+        if self.conn is None:
+            return
+        self._set_busy(True, "저장 중…")
+
+        def done(res):
+            self._set_busy(False)
+            if res.WhichOneof("result") == "err":
+                messagebox.showerror("저장 실패", "오류 코드 %d" % res.err)
+                return
+            self.refresh()
+            self._set_hint("키보드에 저장했습니다.", OK_C)
+
+        def failed(exc):
+            self._set_busy(False)
             messagebox.showerror("저장 실패", str(exc))
-            return
-        if res.WhichOneof("result") == "err":
-            messagebox.showerror("저장 실패", "오류 코드 %d" % res.err)
-            return
-        self.refresh()
-        self._set_hint("키보드에 저장했습니다.", OK_C)
+
+        self.worker.submit(self.conn.save_changes, done, failed)
 
     def discard(self):
-        try:
-            self.conn.discard_changes()
-        except Exception as exc:
-            messagebox.showerror("되돌리기 실패", str(exc))
+        if self.conn is None:
             return
-        self.refresh()
-        self._set_hint("마지막 저장 시점으로 되돌렸습니다.")
+        self._set_busy(True, "되돌리는 중…")
+
+        def done(_r):
+            self._set_busy(False)
+            self.refresh()
+            self._set_hint("마지막 저장 시점으로 되돌렸습니다.")
+
+        def failed(exc):
+            self._set_busy(False)
+            messagebox.showerror("되돌리기 실패", str(exc))
+
+        self.worker.submit(self.conn.discard_changes, done, failed)
 
     def shutdown(self):
-        if self.mode == "probe" and self.conn:
+        conn = self.conn
+        if conn and self.mode == "probe":
             try:
-                self.conn.discard_changes()
+                conn.discard_changes()
             except Exception:
                 pass
-        self.disconnect()
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+        self.conn = None
+        self.worker.stop()
         self.destroy()
 
 
 def main():
     win = EditorWindow()
-    win.show()
     win.protocol("WM_DELETE_WINDOW", win.shutdown)
+    win.show()
     win.mainloop()
 
 
