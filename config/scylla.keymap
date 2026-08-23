@@ -9,6 +9,10 @@
  * Added on top of the original keymap:
  *   lower + bottom-left corner key  -> &studio_unlock  (unlocks Studio writes)
  *   lower + bottom-right corner key -> &bootloader     (flash mode, no reset button)
+ *
+ * Spare 1/2/3 are all-&trans placeholder layers. ZMK Studio cannot create new
+ * layers at runtime, only edit ones the firmware already defines — so these
+ * exist purely to give Studio room to work with later.
  */
 
 #include <behaviors.dtsi>
@@ -60,6 +64,42 @@
    &trans   &trans  &trans      &kp C_VOL_DN      &trans      &trans     &kp KP_N0       &kp KP_N1  &kp KP_N2  &kp KP_N3  &kp KP_PLUS      &trans
                     &trans    &trans     &trans                &trans    &trans    &trans
                               &kp BSPC  &kp LANG1              &kp LALT  &kp DEL
+            >;
+        };
+
+        spare_1_layer {
+            display-name = "Spare 1";
+            bindings = <
+   &trans  &trans  &trans  &trans  &trans  &trans       &trans  &trans  &trans  &trans  &trans  &trans
+   &trans  &trans  &trans  &trans  &trans  &trans       &trans  &trans  &trans  &trans  &trans  &trans
+   &trans  &trans  &trans  &trans  &trans  &trans       &trans  &trans  &trans  &trans  &trans  &trans
+   &trans  &trans  &trans  &trans  &trans  &trans       &trans  &trans  &trans  &trans  &trans  &trans
+                   &trans  &trans  &trans               &trans  &trans  &trans
+                           &trans  &trans               &trans  &trans
+            >;
+        };
+
+        spare_2_layer {
+            display-name = "Spare 2";
+            bindings = <
+   &trans  &trans  &trans  &trans  &trans  &trans       &trans  &trans  &trans  &trans  &trans  &trans
+   &trans  &trans  &trans  &trans  &trans  &trans       &trans  &trans  &trans  &trans  &trans  &trans
+   &trans  &trans  &trans  &trans  &trans  &trans       &trans  &trans  &trans  &trans  &trans  &trans
+   &trans  &trans  &trans  &trans  &trans  &trans       &trans  &trans  &trans  &trans  &trans  &trans
+                   &trans  &trans  &trans               &trans  &trans  &trans
+                           &trans  &trans               &trans  &trans
+            >;
+        };
+
+        spare_3_layer {
+            display-name = "Spare 3";
+            bindings = <
+   &trans  &trans  &trans  &trans  &trans  &trans       &trans  &trans  &trans  &trans  &trans  &trans
+   &trans  &trans  &trans  &trans  &trans  &trans       &trans  &trans  &trans  &trans  &trans  &trans
+   &trans  &trans  &trans  &trans  &trans  &trans       &trans  &trans  &trans  &trans  &trans  &trans
+   &trans  &trans  &trans  &trans  &trans  &trans       &trans  &trans  &trans  &trans  &trans  &trans
+                   &trans  &trans  &trans               &trans  &trans  &trans
+                           &trans  &trans               &trans  &trans
             >;
         };
     };
