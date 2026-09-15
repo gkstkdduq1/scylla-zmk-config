@@ -30,6 +30,22 @@ ASSET_FOR = {
 
 BOOTLOADER_VOLUMES = ("NICENANO", "NANOBOOT", "NRF52BOOT")
 
+# Chip serial -> which half. Both halves mount the same NICENANO volume, so the
+# drive letter cannot tell them apart. Writing to "whatever showed up" put
+# settings_reset.uf2 on the right half once and left the left half running no
+# firmware at all another time, which read as a Bluetooth fault for days. The
+# serial is stable per board, so ask it rather than assume.
+SERIALS = {
+    "BFD689AFCDC0A442": "left",
+    "EE8AB62FD01A3B3D": "right",
+}
+
+HALF_LABEL = {"left": "왼쪽", "right": "오른쪽", "reset": "설정 초기화"}
+
+# Device id prefixes. 239A is the Adafruit UF2 bootloader, 1D50 is ZMK itself.
+BOOTLOADER_USB = r"USB\VID_239A&PID_*"
+APP_USB = r"USB\VID_1D50&PID_*"
+
 
 class FirmwareError(RuntimeError):
     pass
@@ -90,19 +106,23 @@ def sync(firmware_dir: str, release=None, progress=None):
     return release
 
 
+def _powershell(script: str, timeout: float = 15.0) -> str:
+    try:
+        proc = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+            capture_output=True, text=True, timeout=timeout,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    except Exception:
+        return ""
+    return proc.stdout or ""
+
+
 def find_bootloader_drive():
     """-> drive letter of a mounted nRF52 bootloader, or None."""
     ps = ("Get-CimInstance Win32_LogicalDisk |"
           " Where-Object { $_.DriveType -eq 2 } |"
           " ForEach-Object { $_.DeviceID + '|' + $_.VolumeName }")
-    try:
-        proc = subprocess.run(
-            ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps],
-            capture_output=True, text=True, timeout=15,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-    except Exception:
-        return None
-    for line in (proc.stdout or "").splitlines():
+    for line in _powershell(ps).splitlines():
         device, _, volume = line.strip().partition("|")
         if not re.fullmatch(r"[A-Za-z]:", device):
             continue
@@ -111,14 +131,64 @@ def find_bootloader_drive():
     return None
 
 
+def _usb_serials(pattern: str):
+    """-> chip serials of present USB devices whose id matches pattern.
+
+    The composite parent's InstanceId ends in the serial; its MI_* children
+    carry an interface suffix there instead, so skip those. -like leaves the
+    backslashes alone, which -match would need escaped.
+    """
+    ps = ("Get-PnpDevice -PresentOnly |"
+          " Where-Object { $_.InstanceId -like '%s' -and"
+          " $_.InstanceId -notlike '*&MI_*' } |"
+          r" ForEach-Object { $_.InstanceId.Split('\')[-1] }" % pattern)
+    return [ln.strip() for ln in _powershell(ps).splitlines() if ln.strip()]
+
+
+def detect_bootloader():
+    """-> {'drive', 'serial', 'half'} for a board in the bootloader, else None.
+
+    half is None when the serial is not in SERIALS - a board this app has never
+    been told about. Stopping beats guessing, because guessing wrong writes the
+    other half's firmware and breaks the split.
+    """
+    drive = find_bootloader_drive()
+    if not drive:
+        return None
+    serials = _usb_serials(BOOTLOADER_USB)
+    if len(serials) > 1:
+        raise FirmwareError(
+            "두 반쪽이 동시에 부트로더입니다. 하나만 연결하세요.")
+    serial = serials[0] if serials else None
+    return {"drive": drive, "serial": serial,
+            "half": SERIALS.get(serial) if serial else None}
+
+
 def wait_for_bootloader(timeout: float = 90.0, poll: float = 0.7, cancel=None):
+    """-> detect_bootloader() result, or None on timeout or cancel."""
     deadline = time.time() + timeout
     while time.time() < deadline:
         if cancel and cancel():
             return None
-        drive = find_bootloader_drive()
-        if drive:
-            return drive
+        found = detect_bootloader()
+        if found:
+            return found
+        time.sleep(poll)
+    return None
+
+
+def wait_for_app(timeout: float = 20.0, poll: float = 1.0):
+    """-> serial of a board that came back running ZMK, or None.
+
+    A board that took the image leaves the bootloader and re-enumerates as ZMK.
+    Without this check a write that never landed still reports success, which is
+    exactly how a half ended up running nothing while the app said it was done.
+    """
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        serials = _usb_serials(APP_USB)
+        if serials:
+            return serials[0]
         time.sleep(poll)
     return None
 
@@ -132,6 +202,8 @@ def flash(firmware_dir: str, half: str, drive: str):
         shutil.copy(src, drive + "\\")
     except OSError:
         # The board reboots the moment the write completes, so the copy call
-        # usually reports an error even though the flash succeeded.
+        # usually reports an error even though the flash succeeded. A genuine
+        # write failure is indistinguishable here, so callers must confirm with
+        # wait_for_app() rather than treat this returning as success.
         pass
     return name

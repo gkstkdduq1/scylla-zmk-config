@@ -709,7 +709,7 @@ class EditorWindow(tk.Tk):
         same = " (이미 내려받은 버전입니다)" if here == release["tag"] else ""
         if not messagebox.askyesno(
                 "펌웨어 업데이트",
-                "최신 빌드: %s%s\n\n내려받고 왼쪽 반쪽에 올릴까요?"
+                "최신 빌드: %s%s\n\n내려받을까요?"
                 % (release["tag"], same)):
             return
         self._set_busy(True, "내려받는 중…")
@@ -721,33 +721,62 @@ class EditorWindow(tk.Tk):
         if not messagebox.askyesno(
                 "부트로더 진입",
                 "%s 를 내려받았습니다.\n\n"
-                "이제 키보드에서 부트로더 키를 누르세요:\n"
+                "올릴 반쪽을 USB로 연결하고 부트로더 키를 누르세요:\n"
                 "    Lower + 오른쪽 아래 맨 끝 키\n\n"
                 "(리셋 버튼을 빠르게 두 번 눌러도 됩니다.)\n\n"
-                "[예]를 누르면 드라이브가 나타날 때까지 기다립니다."
+                "어느 반쪽인지는 칩 시리얼로 판별하니 고르지 않아도 됩니다. [예]를 누르면 기다립니다."
                 % release["tag"]):
             return
         self._set_busy(True, "부트로더를 기다리는 중…")
         self.worker.submit(lambda: firmware.wait_for_bootloader(90.0),
                            self._bootloader_ready, self._firmware_failed)
 
-    def _bootloader_ready(self, drive):
-        if drive is None:
+    def _bootloader_ready(self, found):
+        """Write to the half that is actually plugged in, then prove it booted.
+
+        The half used to be hardcoded to "left", so putting the right half in
+        the bootloader and pressing this button wrote the left firmware onto it
+        - two centrals and no split. The chip serial says which board this is
+        instead of assuming. And a copy that never landed used to still report
+        success, which is how a half ended up running no firmware at all.
+        """
+        if found is None:
             self._set_busy(False)
             self._set_detail("부트로더 드라이브를 찾지 못했습니다", ui.ERR)
             self._set_hint("부트로더 키가 안 먹으면 리셋 버튼을 빠르게 두 번 누르세요.")
             return
-        self._set_busy(True, "%s 에 쓰는 중…" % drive)
 
-        def done(name):
+        half = found["half"]
+        if half is None:
             self._set_busy(False)
-            self._set_detail("플래싱 완료 — %s" % name, ui.OK)
-            self._set_hint("키보드가 재부팅됩니다. 다시 [USB] 또는 [블루투스]로 "
-                           "연결하세요.")
-            self.disconnect()
+            self._set_detail("어느 반쪽인지 알 수 없습니다", ui.ERR)
+            self._set_hint("시리얼 %s 이 등록되어 있지 않습니다. 잘못 쓰면 스플릿이 "
+                           "깨지므로 중단했습니다. firmware.py 의 SERIALS 에 "
+                           "추가하세요." % (found["serial"] or "?"))
+            return
 
-        self.worker.submit(lambda: firmware.flash(FIRMWARE_DIR, "left", drive),
-                           done, self._firmware_failed)
+        label = firmware.HALF_LABEL[half]
+        self._set_busy(True, "%s 반쪽에 쓰는 중…" % label)
+
+        def work():
+            name = firmware.flash(FIRMWARE_DIR, half, found["drive"])
+            return name, firmware.wait_for_app()
+
+        def done(result):
+            name, back = result
+            self._set_busy(False)
+            self.disconnect()
+            if back:
+                self._set_detail("플래싱 완료 — %s 반쪽 / %s" % (label, name), ui.OK)
+                self._set_hint("다른 반쪽도 같은 방법으로 올리세요. 끝나면 [USB] "
+                               "또는 [블루투스]로 다시 연결하세요.")
+            else:
+                self._set_detail("실패 — %s 반쪽이 부트로더에서 안 나왔습니다"
+                                 % label, ui.ERR)
+                self._set_hint("펌웨어가 올라가지 않았습니다. 이 상태로 두면 그 "
+                               "반쪽은 동작하지 않습니다. 다시 시도하세요.")
+
+        self.worker.submit(work, done, self._firmware_failed)
 
     def _firmware_failed(self, exc):
         self._set_busy(False)
