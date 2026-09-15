@@ -74,9 +74,12 @@ Write-Host "  Found    : $($drive.DeviceID) [$($drive.VolumeName)]" -ForegroundC
 
 # Identify the board before writing. The bootloader enumerates as a composite
 # device whose InstanceId ends in the chip serial; its MI_* children carry an
-# interface suffix instead, so match only the parent.
+# interface suffix instead, so skip anything carrying &MI_. Matching with
+# -like rather than -match keeps the backslashes literal and needs no escaping,
+# which is what broke the first version of this check.
 $boot = @(Get-PnpDevice -PresentOnly -ErrorAction SilentlyContinue |
-    Where-Object { $_.InstanceId -match '^USB\VID_239A&PID_[0-9A-Fa-f]{4}\' })
+    Where-Object { $_.InstanceId -like 'USB\VID_239A&PID_*' -and
+                    $_.InstanceId -notlike '*&MI_*' })
 
 function Stop-Unless-Forced($message) {
     Write-Host ""
@@ -94,7 +97,7 @@ if ($boot.Count -gt 1) {
 } elseif ($boot.Count -eq 0) {
     Stop-Unless-Forced "the drive is there but no bootloader USB device is, so the serial cannot be read."
 } else {
-    $serial = ($boot[0].InstanceId -split '\')[-1]
+    $serial = $boot[0].InstanceId.Split('\')[-1]
     if ($serials.ContainsKey($serial)) {
         $actual = $serials[$serial]
         Write-Host "  Board    : $actual half (serial $serial)" -ForegroundColor Green
@@ -127,7 +130,8 @@ for ($i = 0; $i -lt 15; $i++) {
     Start-Sleep -Seconds 1
     Write-Host "." -NoNewline
     $app = Get-PnpDevice -PresentOnly -ErrorAction SilentlyContinue |
-        Where-Object { $_.InstanceId -match '^USB\VID_1D50&PID_[0-9A-Fa-f]{4}\' }
+        Where-Object { $_.InstanceId -like 'USB\VID_1D50&PID_*' -and
+                        $_.InstanceId -notlike '*&MI_*' }
     if ($app) { break }
 }
 Write-Host ""
