@@ -219,8 +219,11 @@ class EditorWindow(tk.Tk):
             b.config_state(bool(editable) and not self.busy)
         for b in (self.btn_usb, self.btn_ble, self.btn_update):
             b.config_state(not self.busy)
+        # Not while probing: the scratch keymap counts as unsaved changes, and
+        # saving it writes throwaway bindings to flash permanently.
         for b in (self.btn_save, self.btn_discard):
-            b.config_state(self._dirty and not self.busy)
+            b.config_state(self._dirty and not self.busy
+                           and self.mode != "probe")
 
     def _set_busy(self, on, note=None):
         self.busy = on
@@ -550,9 +553,15 @@ class EditorWindow(tk.Tk):
                 "먼저 [저장] 또는 [되돌리기]를 눌러주세요.")
             return
 
-        base_id = self.keymap.layers[0].id
+        base = self.keymap.layers[0]
+        base_id = base.id
         count = len(self.layout.keys)
         self._probe_map = {kc.PROBE_USAGES[p]: p for p in range(count)}
+        # Keep the real bindings. discard_changes is the normal way back, but it
+        # is powerless once anything has been saved, so _end_probe checks the
+        # layer really returned and rewrites it from here if it did not.
+        self._probe_restore = [(b.behavior_id, b.param1, b.param2)
+                               for b in base.bindings]
         self._set_busy(True, "탐색 준비 중…")
 
         def job():
@@ -582,10 +591,38 @@ class EditorWindow(tk.Tk):
     def _end_probe(self, then=None):
         self.mode = "idle"
         self._set_busy(True, "키맵 복구 중…")
+        snapshot = getattr(self, "_probe_restore", None)
 
-        def done(_r):
+        def job():
+            """Undo the probe keymap and make sure it actually went away.
+
+            discard_changes is the cheap path, but it only drops unsaved edits.
+            Anything that saved while the scratch keymap was live is now in
+            flash, and the base layer stays wrong - so compare against the
+            snapshot and rewrite the keys that did not come back.
+            """
+            self.conn.discard_changes()
+            if not snapshot:
+                return 0
+            base = self.conn.get_keymap().layers[0]
+            repaired = 0
+            for pos, want in enumerate(snapshot):
+                if pos >= len(base.bindings):
+                    break
+                live = base.bindings[pos]
+                if (live.behavior_id, live.param1, live.param2) != want:
+                    self.conn.set_binding(base.id, pos, want[0], want[1], want[2])
+                    repaired += 1
+            if repaired:
+                self.conn.save_changes()
+            return repaired
+
+        def done(repaired):
             self._set_busy(False)
             self.refresh()
+            if repaired:
+                self._set_detail("탐색용 키맵이 저장돼 있어 %d개를 되돌렸습니다"
+                                 % repaired, ui.WARN)
             if then:
                 then()
 
@@ -596,7 +633,7 @@ class EditorWindow(tk.Tk):
                 "임시 키맵을 되돌리지 못했습니다: %s\n\n"
                 "저장되지 않은 상태라, 키보드 전원을 껐다 켜면 복구됩니다." % exc)
 
-        self.worker.submit(self.conn.discard_changes, done, failed)
+        self.worker.submit(job, done, failed)
 
     def _on_key(self, evt):
         if self.mode == "idle":
@@ -787,6 +824,18 @@ class EditorWindow(tk.Tk):
 
     def save(self):
         if self.conn is None or not self._dirty:
+            return
+        if self.mode == "probe":
+            # The probe replaces every base-layer binding with a throwaway key
+            # so a physical press can be identified. Saving mid-probe writes
+            # that scratch keymap to flash, and discard_changes cannot undo a
+            # save - it once cost the whole alphabet.
+            messagebox.showwarning(
+                "탐색 중에는 저장할 수 없습니다",
+                """키 탐색 중에는 키맵이 임시로 덮어써진 상태입니다.
+
+지금 저장하면 그 임시 키맵이 키보드에 영구 기록됩니다.
+Esc 로 탐색을 끝낸 뒤 저장하세요.""")
             return
         self._set_busy(True, "저장 중…")
 

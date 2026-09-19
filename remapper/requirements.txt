@@ -1,4 +1,7 @@
 pyserial>=3.5
+# BLE transport and scanning in rpc.py. Without it the Bluetooth button
+# raises ImportError the moment it is pressed.
+bleak>=0.22
 protobuf>=6.0
 grpcio-tools
 pystray>=0.19
