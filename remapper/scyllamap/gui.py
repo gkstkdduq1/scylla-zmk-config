@@ -168,10 +168,10 @@ class EditorWindow(tk.Tk):
         self.btn_update = ui.Button(toolbar, "펌웨어 업데이트",
                                     self.update_firmware, bg=ui.BG)
         self.btn_update.pack(side="right")
-        self.btn_ble = ui.Button(toolbar, "블루투스", self.connect_ble, bg=ui.BG)
-        self.btn_ble.pack(side="right", padx=(0, 6))
-        self.btn_usb = ui.Button(toolbar, "USB", self.connect_usb, bg=ui.BG)
-        self.btn_usb.pack(side="right", padx=(0, 6))
+        # No USB / Bluetooth buttons: choosing a transport by hand only ever
+        # meant guessing which one was live, and guessing wrong looked exactly
+        # like a dead keyboard. autoconnect() takes whichever is reachable and
+        # the link chip says which one it got.
 
         board = tk.Frame(self, bg=ui.SURFACE, highlightthickness=1,
                          highlightbackground=ui.BORDER)
@@ -217,8 +217,7 @@ class EditorWindow(tk.Tk):
     def _set_buttons(self, editable):
         for b in (self.btn_probe, self.btn_pick):
             b.config_state(bool(editable) and not self.busy)
-        for b in (self.btn_usb, self.btn_ble, self.btn_update):
-            b.config_state(not self.busy)
+        self.btn_update.config_state(not self.busy)
         # Not while probing: the scratch keymap counts as unsaved changes, and
         # saving it writes throwaway bindings to flash permanently.
         for b in (self.btn_save, self.btn_discard):
@@ -255,6 +254,8 @@ class EditorWindow(tk.Tk):
     def autoconnect(self):
         """USB if the cable is in, otherwise BLE. USB is faster and always
         reachable; BLE needs the keyboard to be on this machine's profile."""
+        if self.conn is not None or self.busy:
+            return
         if rpc.find_ports():
             self.connect_usb()
         else:
@@ -293,10 +294,7 @@ class EditorWindow(tk.Tk):
         self.disconnect()
         ports = rpc.find_ports()
         if not ports:
-            self._set_detail("키보드를 찾는 중…", ui.WARN)
-            self._set_hint("왼쪽 반쪽을 USB로 연결하면 자동으로 잡습니다. "
-                           "무선으로 쓰시려면 [블루투스]를 누르세요.")
-            self._retry_soon()
+            self.connect_ble()
             return
         self._open(lambda: rpc.Connection.open_serial(ports[0].device))
 
@@ -360,11 +358,12 @@ class EditorWindow(tk.Tk):
         self._set_detail("연결 실패", ui.ERR)
         if self._want_ble:
             self._set_hint("%s\nWindows가 GATT 접근을 막는 경우가 있습니다. "
-                           "USB로도 시도해보세요." % exc)
+                           "키보드가 이 PC의 프로파일에 연결돼 있는지 "
+                           "확인하세요. 계속 재시도합니다." % exc)
         else:
             self._set_hint("%s\nZMK Studio가 켜져 있으면 닫아주세요 — "
                            "포트는 한 프로그램만 쓸 수 있습니다. 계속 재시도합니다." % exc)
-            self._retry_soon()
+        self._retry_soon()
 
     def _retry_soon(self):
         if self._retry_job is not None:
@@ -373,11 +372,14 @@ class EditorWindow(tk.Tk):
 
     def _retry(self):
         self._retry_job = None
-        if self.conn is not None or self.busy or self._want_ble:
+        if self.conn is not None or self.busy:
             return
         if self.state() == "withdrawn":
             return
-        self.connect_usb()
+        # Re-pick the transport every time: the cable can arrive or leave
+        # between attempts, and retrying only the one that just failed strands
+        # the app on a transport that is no longer there.
+        self.autoconnect()
 
     def _poll_lock(self):
         if self.conn is None or self.busy:
@@ -804,8 +806,8 @@ class EditorWindow(tk.Tk):
             self.disconnect()
             if back:
                 self._set_detail("플래싱 완료 — %s 반쪽 / %s" % (label, name), ui.OK)
-                self._set_hint("다른 반쪽도 같은 방법으로 올리세요. 끝나면 [USB] "
-                               "또는 [블루투스]로 다시 연결하세요.")
+                self._set_hint("다른 반쪽도 같은 방법으로 올리세요. "
+                               "연결은 자동으로 다시 잡습니다.")
             else:
                 self._set_detail("실패 — %s 반쪽이 부트로더에서 안 나왔습니다"
                                  % label, ui.ERR)
