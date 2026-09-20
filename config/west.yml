@@ -1,3 +1,11 @@
+# Pinned, not tracking main. With `revision: main` every build pulled whatever
+# ZMK had landed that day, so a build that worked yesterday could break today
+# with nothing changed here - which made a real firmware bug take days to
+# isolate. This SHA is the one the build that fixed it actually used, so the
+# firmware can be rebuilt and get the same thing back.
+#
+# To take newer ZMK: change the revision deliberately, rebuild, flash BOTH
+# halves, and check that switching BLE profiles still works before keeping it.
 manifest:
   remotes:
     - name: zmkfirmware
@@ -5,7 +13,7 @@ manifest:
   projects:
     - name: zmk
       remote: zmkfirmware
-      revision: main
+      revision: 9ebbeff0a8b69a42f14aec022cdf16c7a107b9e0
       import: app/west.yml
   self:
     path: config
