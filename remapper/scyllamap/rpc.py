@@ -289,9 +289,27 @@ def find_paired_ble():
     return out
 
 
+# Names a ZMK keyboard answers to. Windows lists every paired BLE device, mice
+# and headsets included, so something has to pick ours out of the pile.
+KEYBOARD_NAME_HINTS = ("scylla", "zmk")
+
+
+def looks_like_keyboard(name) -> bool:
+    low = (name or "").lower()
+    return any(hint in low for hint in KEYBOARD_NAME_HINTS)
+
+
 def find_ble_devices(timeout: float = 6.0):
-    """Paired devices first, then anything advertising the Studio service."""
+    """Paired devices first, then anything advertising the Studio service.
+
+    The scan is the slow half - seconds of radio time on every connect - and it
+    is only worth paying when the keyboard is not already a paired device
+    Windows can name. Once it is, BleTransport reaches it by address with no
+    discovery at all, so return as soon as the paired list has it.
+    """
     found = find_paired_ble()
+    if any(looks_like_keyboard(n) for _, n in found):
+        return found
     known = {a for a, _ in found}
 
     from bleak import BleakScanner

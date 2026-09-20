@@ -322,8 +322,7 @@ class EditorWindow(tk.Tk):
         """Windows lists every paired BLE device, mice and headsets included.
         Prefer one whose name looks like this keyboard."""
         for addr, name in devices:
-            low = (name or "").lower()
-            if "scylla" in low or "zmk" in low:
+            if rpc.looks_like_keyboard(name):
                 return addr, name
         return devices[0]
 
