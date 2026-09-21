@@ -1,1 +1,5 @@
 firmware/
+
+# Keymap dumps the repair scripts write before touching the keyboard. Local
+# evidence of one board at one moment, not something to carry in the repo.
+remapper/keymap-backup-*.json
